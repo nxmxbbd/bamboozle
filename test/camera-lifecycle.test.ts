@@ -255,6 +255,52 @@ test('a prepared stream that is never started closes its socket and gives the po
   }
 });
 
+// HAP-NodeJS keeps a prepared session's slot in use until STOP, a failed
+// request, forceStopStreamingSession or the controller disconnecting.
+test('a prepared stream that expires frees its session in the Home app', async () => {
+  const cam = camera({ preparedTtlMs: 150 });
+  const forced = spyForceStop(cam);
+  try {
+    await prepare(cam, 'expire-tell', 40000);
+    await delay(500);
+    assert.equal(cam.trackedStreams, 0);
+    assert.deepEqual(forced, ['expire-tell']);
+  } finally {
+    await cam.stop();
+  }
+});
+
+test('a socket error on a prepared stream ends it, frees the port and tells the Home app', async () => {
+  const sockets = new Map<string, Socket>();
+  const cam = camera({ onStreamSocket: (id, socket) => void sockets.set(id, socket) });
+  const forced = spyForceStop(cam);
+  try {
+    const port = await prepare(cam, 'prepared-error', 40000);
+    sockets.get('prepared-error')!.emit('error', new Error('simulated socket failure'));
+    assert.deepEqual(forced, ['prepared-error'], 'the Home app is told at once');
+    await waitFor(() => cam.trackedStreams === 0, 2000);
+    assert.equal(cam.trackedStreams, 0);
+    assert.equal(await portIsFree(port), true);
+    await assert.rejects(start(cam, 'prepared-error'), /not prepared/);
+  } finally {
+    await cam.stop();
+  }
+});
+
+test('STOP of a prepared stream frees it without telling the Home app, which asked', async () => {
+  const cam = camera();
+  const forced = spyForceStop(cam);
+  try {
+    const port = await prepare(cam, 'prepared-stop', 40000);
+    await stopStream(cam, 'prepared-stop');
+    assert.equal(cam.trackedStreams, 0);
+    assert.equal(await portIsFree(port), true);
+    assert.deepEqual(forced, []);
+  } finally {
+    await cam.stop();
+  }
+});
+
 test('stop() while the stream socket is binding fails the prepare and leaves nothing behind', async () => {
   const sockets: Socket[] = [];
   const cam = camera({ onStreamSocket: (_id, socket) => void sockets.push(socket) });

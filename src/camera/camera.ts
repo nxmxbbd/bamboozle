@@ -302,7 +302,7 @@ export class PrinterCamera implements CameraStreamingDelegate {
       stream.state = 'prepared';
       stream.expiry = setTimeout(() => {
         this.#options.log?.log(`[${this.#options.name}] prepared stream was never started; releasing its port`);
-        void this.#end(sessionID, stream);
+        this.#endAndTell(sessionID, stream);
       }, this.#preparedTtlMs);
       this.#answerPrepare(stream, undefined, {
         video: { port: socket.address().port, ssrc: stream.ssrc, srtp_key: stream.srtpKey, srtp_salt: stream.srtpSalt },
@@ -332,9 +332,13 @@ export class PrinterCamera implements CameraStreamingDelegate {
       return;
     }
     log?.warn(`[${name}] stream socket error: ${error.message}; ending the stream`);
-    this.#answerStart(stream, error);
-    if (stream.state === 'running') this.#endAndTell(sessionID, stream);
-    else void this.#end(sessionID, stream);
+    if (stream.state === 'starting') {
+      // A failed START makes HAP-NodeJS close the session itself.
+      this.#answerStart(stream, error);
+      void this.#end(sessionID, stream);
+    } else {
+      this.#endAndTell(sessionID, stream);
+    }
   }
 
   /**
@@ -431,7 +435,12 @@ export class PrinterCamera implements CameraStreamingDelegate {
     });
   }
 
-  /** End a running stream we decided to end, and tell the Home app right away. */
+  /**
+   * End a prepared or running stream we decided to end, and tell the Home
+   * app right away. HAP-NodeJS keeps a session's slot in use until STOP, a
+   * failed request, this call or the controller disconnecting; without it a
+   * stream we dropped would still count against cameraStreamCount.
+   */
   #endAndTell(sessionID: string, stream: Stream): void {
     void this.#end(sessionID, stream); // no longer active at once; ffmpeg stops in the background
     this.controller.forceStopStreamingSession(sessionID);
