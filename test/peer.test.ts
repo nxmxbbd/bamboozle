@@ -88,6 +88,13 @@ test('there is no media address of another family than the stream, or without an
   assert.equal(localMediaAddress('not an address', true), null);
 });
 
+// A link-local address cannot be bound without its interface.
+test('a link-local address without a zone is no media address', () => {
+  assert.equal(localMediaAddress('fe80::abcd', true), null);
+  assert.equal(localMediaAddress('febf::1', true), null);
+  assert.deepEqual(localMediaAddress('fec0::1', true), { address: 'fec0::1', zone: null });
+});
+
 test('a host string carries the zone after a %, and nothing else', () => {
   assert.equal(socketHost({ address: 'fe80::abcd', zone: 'eth0' }), 'fe80::abcd%eth0');
   assert.equal(socketHost({ address: '2001:db8::5', zone: null }), '2001:db8::5');

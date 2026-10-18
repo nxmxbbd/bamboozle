@@ -56,13 +56,15 @@ export function viewerPeer(target: string, localAddress: string | undefined): Pe
  * connection the prepare request came on, in canonical form (see
  * peerAddress: IPv4-mapped IPv6 as IPv4, an IPv6 zone kept). `ipv6` is
  * whether the stream is IPv6. Null when `localAddress` is missing, is not
- * an address, or is of the other family (IPv6 for an IPv4 stream or the
- * other way round); the stream socket then binds on all interfaces and
+ * an address, is of the other family (IPv6 for an IPv4 stream or the other
+ * way round), or is link-local without a zone (it cannot be bound without
+ * its interface); the stream socket then binds on all interfaces and
  * HAP-NodeJS chooses the address it advertises.
  */
 export function localMediaAddress(localAddress: string | undefined, ipv6: boolean): PeerAddress | null {
   const local = localAddress === undefined ? null : peerAddress(localAddress);
   if (local === null || isIPv6(local.address) !== ipv6) return null;
+  if (local.zone === null && isIPv6(local.address) && LINK_LOCAL.check(local.address, 'ipv6')) return null;
   return local;
 }
 
