@@ -9,6 +9,7 @@ import {
 } from 'hap-nodejs';
 import { VERSION } from '../version.ts';
 import { CATEGORY_SENSOR, STATUS_COMMUNICATION_FAILURE } from './hap-constants.ts';
+import { homeKitName } from './names.ts';
 import {
   remainingToLux,
   toDisplay,
@@ -39,11 +40,12 @@ const TEMPERATURE_LABELS: Record<TemperatureSensor, string> = {
   bed: 'Bed',
 };
 
+// Labels end up in HomeKit names: letters, digits, spaces and apostrophes only.
 const PROGRESS_LABELS: Record<ProgressStyle, string> = {
   humidity: 'Progress',
-  window: 'Progress (blind)',
-  fan: 'Progress (fan)',
-  lightbulb: 'Progress (light)',
+  window: 'Progress Blind',
+  fan: 'Progress Fan',
+  lightbulb: 'Progress Light',
 };
 
 type Binding = (values: DisplayValues) => CharacteristicValue;
@@ -101,7 +103,7 @@ export class PrinterAccessories {
   }
 
   #newAccessory(displayName: string, id: string, model = this.#options.model): Accessory {
-    const accessory = new Accessory(displayName, id);
+    const accessory = new Accessory(homeKitName(displayName), id);
     accessory.category = CATEGORY_SENSOR;
     accessory
       .getService(Service.AccessoryInformation)!
@@ -115,7 +117,7 @@ export class PrinterAccessories {
 
   #service(type: WithUUID<typeof Service>, key: string, label: string): Service {
     const accessory = this.#host(key, label);
-    const name = `${this.#options.name} ${label}`;
+    const name = homeKitName(`${this.#options.name} ${label}`);
     const service = accessory.addService(type, name, key);
     service.addOptionalCharacteristic(Characteristic.ConfiguredName);
     service.setCharacteristic(Characteristic.ConfiguredName, name);
@@ -161,6 +163,17 @@ export class PrinterAccessories {
 
   #addProgress(style: ProgressStyle): void {
     const label = PROGRESS_LABELS[style];
+    const before = new Set(this.accessories.flatMap((a) => a.services));
+    this.#addProgressService(style, label);
+    // On a grouped tile the Home app shows the primary service: make that the
+    // first configured progress style.
+    if (this.#options.layout === 'grouped' && style === this.#options.progress[0]) {
+      const added = this.accessories.flatMap((a) => a.services).find((s) => !before.has(s));
+      added?.setPrimaryService(true);
+    }
+  }
+
+  #addProgressService(style: ProgressStyle, label: string): void {
     switch (style) {
       case 'humidity': {
         const service = this.#service(Service.HumiditySensor, 'progress-humidity', label);
