@@ -10,3 +10,6 @@ config.json
 
 # Raw printer reports: run scripts/sanitize-report.ts before committing one.
 *.raw.json
+
+# Overlay previews (scripts/preview-overlay.ts).
+preview/
