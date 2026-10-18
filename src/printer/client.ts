@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { EventEmitter } from 'node:events';
-import { MqttClient } from 'mqtt';
+import { MqttClient, type IClientOptions } from 'mqtt';
 import { ReportAccumulator } from './accumulator.ts';
 import { connectPinned, type PinStore } from './pinned-tls.ts';
 import type { PrinterStatus } from './status.ts';
@@ -12,6 +12,9 @@ export interface PrinterConnection {
   serial: string;
   accessCode: string;
 }
+
+/** Builds the MQTT client; replaceable in tests. */
+export type MqttFactory = (streamBuilder: ConstructorParameters<typeof MqttClient>[0], options: IClientOptions) => MqttClient;
 
 export interface PrinterClientEvents {
   status: [PrinterStatus];
@@ -32,10 +35,13 @@ export class PrinterClient extends EventEmitter<PrinterClientEvents> {
   #online = false;
   #status: PrinterStatus | null = null;
 
-  constructor(connection: PrinterConnection, pins: PinStore) {
+  readonly #createMqtt: MqttFactory;
+
+  constructor(connection: PrinterConnection, pins: PinStore, createMqtt: MqttFactory = (builder, options) => new MqttClient(builder, options)) {
     super();
     this.#connection = connection;
     this.#pins = pins;
+    this.#createMqtt = createMqtt;
   }
 
   get name(): string {
@@ -61,7 +67,7 @@ export class PrinterClient extends EventEmitter<PrinterClientEvents> {
     const reportTopic = `device/${serial}/report`;
     const requestTopic = `device/${serial}/request`;
 
-    const mqtt = new MqttClient(() => connectPinned(host, port, this.#pins, (fp) => this.emit('pinned', fp)), {
+    const mqtt = this.#createMqtt(() => connectPinned(host, port, this.#pins, (fp) => this.emit('pinned', fp)), {
       protocolVersion: 4,
       clientId: `bamboozle_${randomBytes(4).toString('hex')}`,
       username: 'bblp',
@@ -75,9 +81,12 @@ export class PrinterClient extends EventEmitter<PrinterClientEvents> {
     this.#mqtt = mqtt;
 
     mqtt.on('connect', () => {
-      this.#setOnline(true);
-      // A fresh session starts from a fresh full report.
+      // A fresh session starts from a fresh full report. Forget the old one
+      // before announcing the connection, or listeners would see stale
+      // readings as current.
       this.#accumulator.reset();
+      this.#status = null;
+      this.#setOnline(true);
       mqtt.subscribe(reportTopic, { qos: 0 }, (error) => {
         if (error) {
           this.emit('error', error);

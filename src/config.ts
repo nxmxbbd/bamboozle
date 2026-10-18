@@ -126,20 +126,36 @@ function parsePrinter(item: unknown, index: number, baseDir: string): PrinterCon
   return printer;
 }
 
+const CAMERA_SCHEMES = new Set(['rtsp:', 'rtsps:', 'http:', 'https:']);
+
+/**
+ * Camera sources are an allowlist, and messages never echo the source: a
+ * URL with credentials (or one ffmpeg would unwrap, such as async:rtsp://…)
+ * would put the printer's access code into ffmpeg's command line.
+ */
 function parseCameraSource(value: unknown, where: string): string {
   const source = requireString(value, where);
-  if (source.startsWith('lavfi:')) return source;
-  let url: URL | null = null;
-  try {
-    url = new URL(source);
-  } catch {
-    url = null; // a plain file path
+  const allowed = `${where} must be an rtsp://, rtsps://, http:// or https:// URL, an absolute file path, or lavfi:<graph>`;
+  if (source.startsWith('lavfi:')) {
+    if (/:\/\/|@/.test(source.slice('lavfi:'.length))) throw new ConfigError(`${where}: a lavfi graph may not reference a URL`);
+    return source;
   }
-  if (url && (url.username || url.password)) {
-    throw new ConfigError(
-      `${where}: credentials in the URL would be visible in ffmpeg's command line; serve the stream from a local relay such as go2rtc instead`,
-    );
+  if (/^[a-z][a-z0-9+.-]*:/i.test(source)) {
+    let url: URL;
+    try {
+      url = new URL(source);
+    } catch {
+      throw new ConfigError(`${where} is not a valid URL; ${allowed}`);
+    }
+    if (!CAMERA_SCHEMES.has(url.protocol)) throw new ConfigError(allowed);
+    if (url.username || url.password) {
+      throw new ConfigError(
+        `${where}: credentials in the URL would be visible in ffmpeg's command line; serve the stream from a local relay such as go2rtc instead`,
+      );
+    }
+    return source;
   }
+  if (!source.startsWith('/')) throw new ConfigError(allowed);
   return source;
 }
 
@@ -224,12 +240,28 @@ export function parseConfig(raw: unknown, baseDir: string): Config {
   };
 }
 
+/** Line of a character offset, for error messages that must not quote the file. */
+function lineAt(text: string, offset: number): number {
+  return text.slice(0, offset).split('\n').length;
+}
+
 export function loadConfig(path: string): Config {
+  let text: string;
+  try {
+    text = readFileSync(path, 'utf8');
+  } catch (error) {
+    throw new ConfigError(`cannot read config ${path} (${(error as NodeJS.ErrnoException).code ?? 'read error'})`);
+  }
   let raw: unknown;
   try {
-    raw = JSON.parse(readFileSync(path, 'utf8'));
+    raw = JSON.parse(text);
   } catch (error) {
-    throw new ConfigError(`cannot read config ${path}: ${(error as Error).message}`);
+    // The parser's message quotes the input around the error, which can be
+    // the access code. Report only where it is.
+    const message = (error as Error).message;
+    const line = /line (\d+)/.exec(message)?.[1] ?? /position (\d+)/.exec(message)?.[1];
+    const where = /line \d+/.test(message) ? ` at line ${line}` : line ? ` at line ${lineAt(text, Number(line))}` : '';
+    throw new ConfigError(`config ${path} is not valid JSON${where}`);
   }
   return parseConfig(raw, dirname(resolve(path)));
 }

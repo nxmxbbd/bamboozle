@@ -83,6 +83,14 @@ export function connectPinned(
   });
 
   socket.on('secureConnect', () => {
+    try {
+      checkPin();
+    } catch (error) {
+      // An unreadable pin or a full disk fails this connection, not the process.
+      gate.destroy(error instanceof Error ? error : new Error(String(error)));
+    }
+  });
+  const checkPin = () => {
     const fingerprint = socket.getPeerCertificate().fingerprint256;
     const expected = pins.load();
     if (!fingerprint) {
@@ -104,7 +112,7 @@ export function connectPinned(
     }
     verified = true;
     for (const { chunk, callback } of pending.splice(0)) socket.write(chunk, callback);
-  });
+  };
   socket.on('data', (data: Buffer) => {
     if (!gate.push(data)) socket.pause();
   });

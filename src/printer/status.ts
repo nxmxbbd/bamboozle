@@ -152,7 +152,8 @@ export function parseStatus(report: JsonObject): PrinterStatus {
     : flatTemperature(print, 'nozzle_temper', 'nozzle_target_temper');
 
   return {
-    state: gcodeState === null ? 'unknown' : (GCODE_STATES[gcodeState] ?? 'unknown'),
+    // Own properties only: "constructor" or "__proto__" must not resolve.
+    state: gcodeState !== null && Object.hasOwn(GCODE_STATES, gcodeState) ? (GCODE_STATES[gcodeState] as PrintState) : 'unknown',
     gcodeState,
     progress: num(print['mc_percent']),
     remainingMinutes: num(print['mc_remaining_time']),

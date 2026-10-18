@@ -172,3 +172,26 @@ test('filePinStore persists one pin per serial with private permissions', () => 
     rmSync(storage, { recursive: true, force: true });
   }
 });
+
+test('pin store failures fail the connection, not the process, and send nothing', async (t) => {
+  if (!hasOpenssl) return t.skip('openssl not available');
+  const echo = await echoServer(certA);
+  t.after(() => echo.server.close());
+  const failing = (where: 'load' | 'save'): PinStore => ({
+    load: () => {
+      if (where === 'load') throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' });
+      return null;
+    },
+    save: () => {
+      throw Object.assign(new Error('ENOSPC: no space left on device'), { code: 'ENOSPC' });
+    },
+  });
+  for (const where of ['load', 'save'] as const) {
+    const stream = connectPinned('127.0.0.1', echo.port, failing(where));
+    stream.write('MQTT CONNECT with the access code');
+    const error = await new Promise<NodeJS.ErrnoException>((resolve) => stream.once('error', resolve));
+    assert.equal(error.code, where === 'load' ? 'EACCES' : 'ENOSPC');
+  }
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.equal(echo.received(), 0);
+});
