@@ -495,6 +495,27 @@ test('packets from the viewer that are not RTCP do not arm the idle check', asyn
   }
 });
 
+// A stateful host firewall drops the viewer's RTCP as unsolicited unless the
+// advertised port has sent to the viewer's RTP port first.
+test('a started stream sends one empty datagram from the advertised port to the viewer', async () => {
+  const viewer = (await boundTo('127.0.0.1'))!;
+  const received: Array<{ size: number; port: number }> = [];
+  viewer.on('message', (packet, from) => void received.push({ size: packet.length, port: from.port }));
+  const cam = camera(FAKE_STREAM);
+  try {
+    const port = await prepare(cam, 'return-path', viewer.address().port);
+    await delay(100);
+    assert.deepEqual(received, [], 'nothing is sent before START');
+    await start(cam, 'return-path');
+    await waitFor(() => received.length > 0, 2000);
+    await delay(100);
+    assert.deepEqual(received, [{ size: 0, port }]);
+  } finally {
+    viewer.close();
+    await cam.stop();
+  }
+});
+
 // --- snapshots -------------------------------------------------------------------
 
 test('invalid snapshot sizes are refused without starting ffmpeg', async () => {

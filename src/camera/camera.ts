@@ -144,10 +144,11 @@ function looksLikeRtcp(packet: Buffer): boolean {
  * happens and dropped only once its socket is closed and its ffmpeg has
  * exited, so STOP or stop() at any moment finds and ends it. A stream ends
  * on STOP, when ffmpeg exits, on a socket error, or when the viewer's RTCP
- * goes quiet. That last one rests on an ASSUMPTION not yet verified against
- * a real Home app: that the viewer sends RTCP to the port we advertised. It
- * is failure-safe: if no RTCP ever arrives, the idle check is never armed
- * and a stream is never ended on a guess.
+ * goes quiet. The Home app sends its RTCP to the port we advertised, from
+ * the port it receives the video on (seen with an iPhone; see
+ * #openReturnPath for host firewalls). The idle check is failure-safe: if no
+ * RTCP ever arrives, it is never armed and a stream is never ended on a
+ * guess.
  */
 export class PrinterCamera implements CameraStreamingDelegate {
   readonly accessory: Accessory;
@@ -349,16 +350,36 @@ export class PrinterCamera implements CameraStreamingDelegate {
   }
 
   /**
-   * Viewer activity, for the idle check. ASSUMPTION, not yet verified
-   * against a real Home app: the viewer sends its RTCP to the port we
-   * advertised in the prepare response. Only RTCP-shaped packets from the
-   * viewer (Stream.peerKey) count; anything else is ignored.
+   * Viewer activity, for the idle check: the viewer's RTCP, sent to the
+   * port we advertised in the prepare response. Only RTCP-shaped packets
+   * from the viewer (Stream.peerKey) count; anything else is ignored.
    */
   #datagram(stream: Stream, packet: Buffer, sender: RemoteInfo): void {
     if (stream.state !== 'running') return;
     if (!isSamePeer(stream.peerKey, sender.address) || !looksLikeRtcp(packet)) return;
     if (stream.lastRtcp === null) this.#options.log?.log(`[${this.#options.name}] receiving RTCP from the viewer`);
     stream.lastRtcp = Date.now();
+  }
+
+  /**
+   * Send one empty datagram from the advertised port to the port the viewer
+   * receives the video on. The viewer sends its RTCP from that port to the
+   * advertised one; a stateful host firewall (ufw, firewalld) drops those
+   * packets as unsolicited unless this socket has sent to that address and
+   * port first, which makes them replies. An empty packet is not valid
+   * SRTP, so the viewer discards it. If sending fails, the idle check just
+   * stays unarmed.
+   */
+  #openReturnPath(stream: Stream): void {
+    const { name, log } = this.#options;
+    const failed = (error: Error) => log?.warn(`[${name}] could not open the RTCP return path: ${error.message}`);
+    try {
+      stream.socket.send(Buffer.alloc(0), stream.targetPort, stream.peer, (error) => {
+        if (error && stream.state === 'running') failed(error);
+      });
+    } catch (error) {
+      failed(error as Error);
+    }
   }
 
   handleStreamRequest(request: StreamingRequest, callback: StreamRequestCallback): void {
@@ -418,6 +439,7 @@ export class PrinterCamera implements CameraStreamingDelegate {
         return;
       }
       stream.state = 'running';
+      this.#openReturnPath(stream);
       stream.watchdog = setInterval(() => {
         // Armed only once RTCP has been seen: never end a stream on a guess.
         if (stream.state === 'running' && stream.lastRtcp !== null && Date.now() - stream.lastRtcp > this.#idleMs) {
