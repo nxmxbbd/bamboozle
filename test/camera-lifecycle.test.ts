@@ -8,6 +8,7 @@ import { createSocket, type Socket } from 'node:dgram';
 import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { PrepareStreamResponse } from 'hap-nodejs';
 import { PrinterCamera, SNAPSHOT_CACHE_SIZES, SNAPSHOT_QUEUE_LIMIT, type PrinterCameraOptions } from '../src/camera/camera.ts';
 import { STREAM_START, STREAM_STOP } from '../src/homekit/hap-constants.ts';
 
@@ -71,20 +72,36 @@ function intervals(log: string): Array<{ pid: string; start: number; end?: numbe
 
 // --- streams ---------------------------------------------------------------------
 
-async function prepare(cam: PrinterCamera, sessionID: string, targetPort: number): Promise<number> {
+/**
+ * An IPv4 prepare request and the whole response. `sourceAddress` is our
+ * end of the HAP connection, left out of the request when undefined;
+ * `targetAddress` is the viewer. Both default to 127.0.0.1.
+ */
+async function prepareResponse(
+  cam: PrinterCamera,
+  sessionID: string,
+  targetPort: number,
+  addresses: { sourceAddress?: string | undefined; targetAddress?: string } = {},
+): Promise<PrepareStreamResponse> {
+  const { sourceAddress, targetAddress } = { sourceAddress: '127.0.0.1', targetAddress: '127.0.0.1', ...addresses };
   return new Promise((resolve, reject) =>
     cam.prepareStream(
       {
         sessionID,
-        sourceAddress: '127.0.0.1',
-        targetAddress: '127.0.0.1',
+        ...(sourceAddress === undefined ? {} : { sourceAddress }),
+        targetAddress,
         addressVersion: 'ipv4',
         video: { port: targetPort, srtpCryptoSuite: 0, srtp_key: Buffer.alloc(16, 1), srtp_salt: Buffer.alloc(14, 2) },
         audio: { port: targetPort + 2, srtpCryptoSuite: 0, srtp_key: Buffer.alloc(16), srtp_salt: Buffer.alloc(14) },
       } as never,
-      (error, response) => (error || !response ? reject(error) : resolve((response.video as { port: number }).port)),
+      (error, response) => (error || !response ? reject(error) : resolve(response)),
     ),
   );
+}
+
+/** The port the camera advertises for an IPv4 stream from and to 127.0.0.1. */
+async function prepare(cam: PrinterCamera, sessionID: string, targetPort: number): Promise<number> {
+  return ((await prepareResponse(cam, sessionID, targetPort)).video as { port: number }).port;
 }
 
 function startRequest(sessionID: string): never {
@@ -119,6 +136,11 @@ const fakeStream = join(dir, 'fake-stream.sh');
 writeFileSync(fakeStream, '#!/bin/sh\nexec sleep 30\n');
 chmodSync(fakeStream, 0o755);
 const FAKE_STREAM: Partial<PrinterCameraOptions> = { ffmpeg: { path: fakeStream, encoder: 'libx264', vaapiDevice: '/dev/dri/renderD128' } };
+
+// The same, but it first writes its arguments, one per line, to $BZ_ARGS_FILE.
+const argsStream = join(dir, 'args-stream.sh');
+writeFileSync(argsStream, '#!/bin/sh\nprintf \'%s\\n\' "$@" > "$BZ_ARGS_FILE"\nexec sleep 30\n');
+chmodSync(argsStream, 0o755);
 
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -512,6 +534,73 @@ test('a started stream sends one empty datagram from the advertised port to the 
     assert.deepEqual(received, [{ size: 0, port }]);
   } finally {
     viewer.close();
+    await cam.stop();
+  }
+});
+
+// The viewer sends its RTCP to the address HAP-NodeJS advertises; the empty
+// datagram must come from that same address, or a stateful firewall does not
+// take the RTCP for a reply.
+test('a stream with a known local address advertises that address and sends from it', async () => {
+  const sockets = new Map<string, Socket>();
+  const cam = camera({ onStreamSocket: (id, socket) => void sockets.set(id, socket) });
+  try {
+    const response = await prepareResponse(cam, 'local-address', 40000, { sourceAddress: '127.0.0.1' });
+    assert.equal(response.addressOverride, '127.0.0.1', 'advertised to the viewer');
+    assert.equal(sockets.get('local-address')!.address().address, '127.0.0.1', 'the socket is bound to it');
+  } finally {
+    await cam.stop();
+  }
+});
+
+// Preservation: without our local address, the socket binds on all
+// interfaces and HAP-NodeJS chooses the advertised address, as before.
+test('a stream without a known local address binds on all interfaces and advertises nothing itself', async () => {
+  const sockets = new Map<string, Socket>();
+  const cam = camera({ onStreamSocket: (id, socket) => void sockets.set(id, socket) });
+  try {
+    const response = await prepareResponse(cam, 'no-local-address', 40000, { sourceAddress: undefined });
+    assert.equal('addressOverride' in response, false);
+    assert.equal(sockets.get('no-local-address')!.address().address, '0.0.0.0');
+  } finally {
+    await cam.stop();
+  }
+});
+
+// A dual-stack HAP server reports IPv4 peers as IPv4-mapped IPv6, which an
+// IPv4 socket cannot send to.
+test('an IPv4-mapped viewer address gets the empty datagram on its IPv4 address', async () => {
+  const viewer = (await boundTo('127.0.0.1'))!;
+  const received: Array<{ size: number; port: number }> = [];
+  viewer.on('message', (packet, from) => void received.push({ size: packet.length, port: from.port }));
+  const cam = camera(FAKE_STREAM);
+  try {
+    const response = await prepareResponse(cam, 'mapped-viewer', viewer.address().port, {
+      sourceAddress: '::ffff:127.0.0.1',
+      targetAddress: '::ffff:127.0.0.1',
+    });
+    await start(cam, 'mapped-viewer');
+    await waitFor(() => received.length > 0, 2000);
+    await delay(100);
+    assert.deepEqual(received, [{ size: 0, port: (response.video as { port: number }).port }]);
+  } finally {
+    viewer.close();
+    await cam.stop();
+  }
+});
+
+test('ffmpeg sends the video to the canonical viewer address', async () => {
+  const file = join(dir, 'args-mapped-viewer.txt');
+  process.env['BZ_ARGS_FILE'] = file;
+  const cam = camera({ ffmpeg: { path: argsStream, encoder: 'libx264', vaapiDevice: '/dev/dri/renderD128' } });
+  try {
+    await prepareResponse(cam, 'mapped-ffmpeg', 40000, { sourceAddress: '::ffff:127.0.0.1', targetAddress: '::ffff:127.0.0.1' });
+    await start(cam, 'mapped-ffmpeg');
+    await waitFor(() => existsSync(file) && readFileSync(file, 'utf8').includes('pkt_size='), 2000);
+    const target = readFileSync(file, 'utf8').split('\n').find((arg) => arg.startsWith('srtp://'));
+    assert.ok(target?.startsWith('srtp://127.0.0.1:40000?'), `ffmpeg target ${String(target)}`);
+  } finally {
+    delete process.env['BZ_ARGS_FILE'];
     await cam.stop();
   }
 });

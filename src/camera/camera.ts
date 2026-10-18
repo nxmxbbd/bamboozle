@@ -28,7 +28,7 @@ import {
 import { homeKitName } from '../homekit/names.ts';
 import { runForOutput, snapshotArgs, stopProcess, streamArgs, type FfmpegSettings } from './ffmpeg.ts';
 import { OverlayFiles, overlayContent, overlayFilter, type OverlayFonts, type OverlayInput } from './overlay.ts';
-import { isSamePeer, type PeerAddress, viewerPeer } from './peer.ts';
+import { isSamePeer, localMediaAddress, type PeerAddress, socketHost, viewerPeer } from './peer.ts';
 
 export interface PrinterCameraOptions {
   name: string;
@@ -79,18 +79,28 @@ type StreamState = 'binding' | 'prepared' | 'starting' | 'running' | 'ending';
 /** One live-video session, from prepareStream until it has fully ended. */
 interface Stream {
   state: StreamState;
-  /** Bound to the port we advertise for the session (see #datagram). */
+  /**
+   * Bound to the port we advertise for the session (see #datagram), and to
+   * the address we advertise when our local address is known (see
+   * prepareStream).
+   */
   socket: Socket;
   /** Settles on the socket's 'close' (a next-tick event after close()). */
   closed: Promise<void>;
-  /** The prepare request's target address, where the video goes. */
-  peer: string;
   /**
    * The only sender whose RTCP counts (none if the target is not an
    * address): the target in canonical form, held to the interface of the
    * HAP connection when it is link-local (see viewerPeer).
    */
   peerKey: PeerAddress | null;
+  /**
+   * Where the video and the return-path datagram go: peerKey as a host
+   * string, with our zone when it has one (see socketHost), so neither the
+   * viewer's own zone nor an IPv4-mapped form reaches the socket or ffmpeg.
+   * When the target is not an address (peerKey is null), the target as
+   * given.
+   */
+  destination: string;
   ipv6: boolean;
   targetPort: number;
   srtpKey: Buffer;
@@ -266,19 +276,33 @@ export class PrinterCamera implements CameraStreamingDelegate {
 
   // --- live video --------------------------------------------------------------
 
+  /**
+   * Bind a stream's socket and answer with its port. The viewer sends its
+   * RTCP to the address HAP-NodeJS advertises in the SetupEndpoints
+   * response. When our end of the HAP connection (request.sourceAddress)
+   * is an address of the stream's family (see localMediaAddress), the
+   * socket is bound to it, with its zone, and its canonical address
+   * without a zone is advertised as addressOverride. Otherwise the socket
+   * binds on all interfaces and HAP-NodeJS advertises an address of the
+   * connection's interface of its own choosing. Our own end of a connection
+   * can be bound, so there is no fallback: a bind error fails the prepare
+   * (see #socketError).
+   */
   prepareStream(request: PrepareStreamRequest, callback: PrepareStreamCallback): void {
     const { sessionID } = request;
     if (this.#stopping) return callback(new Error('camera is stopping'));
     if (this.#streams.has(sessionID)) return callback(new Error('stream is already prepared'));
     const ipv6 = request.addressVersion === 'ipv6';
+    const local = localMediaAddress(request.sourceAddress, ipv6);
+    const peerKey = viewerPeer(request.targetAddress, request.sourceAddress);
     const socket = createSocket(ipv6 ? 'udp6' : 'udp4');
     const stream: Stream = {
       state: 'binding',
       socket,
       // Listening from the start: close() is only ever called after this.
       closed: new Promise<void>((resolve) => socket.once('close', () => resolve())),
-      peer: request.targetAddress,
-      peerKey: viewerPeer(request.targetAddress, request.sourceAddress),
+      peerKey,
+      destination: peerKey === null ? request.targetAddress : socketHost(peerKey),
       ipv6,
       targetPort: request.video.port,
       srtpKey: request.video.srtp_key,
@@ -298,7 +322,8 @@ export class PrinterCamera implements CameraStreamingDelegate {
     socket.on('error', (error) => this.#socketError(sessionID, stream, error));
     socket.on('message', (packet, sender) => this.#datagram(stream, packet, sender));
     this.#options.onStreamSocket?.(sessionID, socket);
-    socket.bind(0, () => {
+    // Without an address, the socket binds on all interfaces.
+    socket.bind(0, local === null ? undefined : socketHost(local), () => {
       // A socket closed while binding never gets here; this covers a
       // cancellation that left it open.
       if (stream.state !== 'binding' || this.#stopping) {
@@ -313,6 +338,7 @@ export class PrinterCamera implements CameraStreamingDelegate {
         this.#endAndTell(sessionID, stream);
       }, this.#preparedTtlMs);
       this.#answerPrepare(stream, undefined, {
+        ...(local === null ? {} : { addressOverride: local.address }),
         video: { port: socket.address().port, ssrc: stream.ssrc, srtp_key: stream.srtpKey, srtp_salt: stream.srtpSalt },
       });
     });
@@ -363,18 +389,22 @@ export class PrinterCamera implements CameraStreamingDelegate {
 
   /**
    * Send one empty datagram from the advertised port to the port the viewer
-   * receives the video on. The viewer sends its RTCP from that port to the
-   * advertised one; a stateful host firewall (ufw, firewalld) drops those
-   * packets as unsolicited unless this socket has sent to that address and
-   * port first, which makes them replies. An empty packet is not valid
-   * SRTP, so the viewer discards it. If sending fails, the idle check just
-   * stays unarmed.
+   * receives the video on, at Stream.destination. The viewer sends its RTCP
+   * from that port to the advertised address and port; a stateful host
+   * firewall (ufw, firewalld) drops those packets as unsolicited unless
+   * this socket has sent to the viewer's address and port first, from the
+   * advertised address, which makes them replies. When our local address is
+   * known, the socket is bound to the address we advertise (see
+   * prepareStream), so the source and the advertised address agree by
+   * construction; otherwise the source is left to routing and can differ.
+   * An empty packet is not valid SRTP, so the viewer discards it. If
+   * sending fails, the idle check just stays unarmed.
    */
   #openReturnPath(stream: Stream): void {
     const { name, log } = this.#options;
     const failed = (error: Error) => log?.warn(`[${name}] could not open the RTCP return path: ${error.message}`);
     try {
-      stream.socket.send(Buffer.alloc(0), stream.targetPort, stream.peer, (error) => {
+      stream.socket.send(Buffer.alloc(0), stream.targetPort, stream.destination, (error) => {
         if (error && stream.state === 'running') failed(error);
       });
     } catch (error) {
@@ -410,7 +440,7 @@ export class PrinterCamera implements CameraStreamingDelegate {
       payloadType: video.pt,
       mtu: video.mtu,
       ssrc: stream.ssrc,
-      targetAddress: stream.peer,
+      targetAddress: stream.destination,
       ipv6: stream.ipv6,
       targetPort: stream.targetPort,
       srtpKey: stream.srtpKey,

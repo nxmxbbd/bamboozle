@@ -52,6 +52,29 @@ export function viewerPeer(target: string, localAddress: string | undefined): Pe
 }
 
 /**
+ * Our address for a stream's media: `localAddress`, our end of the HAP
+ * connection the prepare request came on, in canonical form (see
+ * peerAddress: IPv4-mapped IPv6 as IPv4, an IPv6 zone kept). `ipv6` is
+ * whether the stream is IPv6. Null when `localAddress` is missing, is not
+ * an address, or is of the other family (IPv6 for an IPv4 stream or the
+ * other way round); the stream socket then binds on all interfaces and
+ * HAP-NodeJS chooses the address it advertises.
+ */
+export function localMediaAddress(localAddress: string | undefined, ipv6: boolean): PeerAddress | null {
+  const local = localAddress === undefined ? null : peerAddress(localAddress);
+  if (local === null || isIPv6(local.address) !== ipv6) return null;
+  return local;
+}
+
+/**
+ * `peer` as a host string for a socket (bind, send) or ffmpeg: the address
+ * with `%zone` appended when it has a zone, the address alone otherwise.
+ */
+export function socketHost(peer: PeerAddress): string {
+  return peer.zone === null ? peer.address : `${peer.address}%${peer.zone}`;
+}
+
+/**
  * Whether `sender`, a datagram's source as Node reports it, is the
  * `expected` peer. Null `expected` never matches, nor does a sender that
  * is not an address (see peerAddress). The canonical addresses must be the

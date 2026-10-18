@@ -1,7 +1,7 @@
 // Which sender counts as the viewer, for the RTCP idle check.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { isSamePeer, peerAddress, viewerPeer } from '../src/camera/peer.ts';
+import { isSamePeer, localMediaAddress, peerAddress, socketHost, viewerPeer } from '../src/camera/peer.ts';
 
 const same = (expected: string, sender: string) => isSamePeer(peerAddress(expected), sender);
 const viewer = (target: string, local: string | undefined, sender: string) => isSamePeer(viewerPeer(target, local), sender);
@@ -71,6 +71,27 @@ test('limitation: with no local zone known, a link-local viewer matches on any i
   assert.equal(viewer('fe80::1234', 'fe80::abcd', 'fe80::1234%eth1'), true);
   assert.equal(viewer('fe80::1234', undefined, 'fe80::1234%eth1'), true);
   assert.equal(viewer('fe80::1234', 'not an address', 'fe80::1234%eth1'), true);
+});
+
+// Our media address: our end of the HAP connection, when it fits the stream.
+test('our media address is our end of the HAP connection in canonical form', () => {
+  assert.deepEqual(localMediaAddress('::ffff:192.0.2.33', false), { address: '192.0.2.33', zone: null });
+  assert.deepEqual(localMediaAddress('192.0.2.33', false), { address: '192.0.2.33', zone: null });
+  assert.deepEqual(localMediaAddress('fe80::abcd%eth0', true), { address: 'fe80::abcd', zone: 'eth0' });
+  assert.deepEqual(localMediaAddress('2001:db8::5', true), { address: '2001:db8::5', zone: null });
+});
+
+test('there is no media address of another family than the stream, or without an address', () => {
+  assert.equal(localMediaAddress('192.0.2.33', true), null);
+  assert.equal(localMediaAddress('fe80::abcd%eth0', false), null);
+  assert.equal(localMediaAddress(undefined, false), null);
+  assert.equal(localMediaAddress('not an address', true), null);
+});
+
+test('a host string carries the zone after a %, and nothing else', () => {
+  assert.equal(socketHost({ address: 'fe80::abcd', zone: 'eth0' }), 'fe80::abcd%eth0');
+  assert.equal(socketHost({ address: '2001:db8::5', zone: null }), '2001:db8::5');
+  assert.equal(socketHost({ address: '192.0.2.33', zone: null }), '192.0.2.33');
 });
 
 // Preservation checks: these held before as well.
