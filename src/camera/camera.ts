@@ -28,6 +28,7 @@ import {
 import { homeKitName } from '../homekit/names.ts';
 import { runForOutput, snapshotArgs, stopProcess, streamArgs, type FfmpegSettings } from './ffmpeg.ts';
 import { OverlayFiles, overlayContent, overlayFilter, type OverlayFonts, type OverlayInput } from './overlay.ts';
+import { isSamePeer, peerAddress, type PeerAddress } from './peer.ts';
 
 export interface PrinterCameraOptions {
   name: string;
@@ -80,8 +81,10 @@ interface Stream {
   state: StreamState;
   /** Bound to the port we advertise for the session (see #datagram). */
   socket: Socket;
-  /** The prepare request's target address: the only sender whose RTCP counts. */
+  /** The prepare request's target address, where the video goes. */
   peer: string;
+  /** The same, parsed: the only sender whose RTCP counts (none if it does not parse). */
+  peerKey: PeerAddress | null;
   ipv6: boolean;
   targetPort: number;
   srtpKey: Buffer;
@@ -122,11 +125,6 @@ function closeSocket(socket: Socket): void {
 /** An RTCP header: version 2 and a packet type from 200 (SR) to 206 (PSFB). */
 function looksLikeRtcp(packet: Buffer): boolean {
   return packet.length >= 8 && packet[0]! >> 6 === 2 && packet[1]! >= 200 && packet[1]! <= 206;
-}
-
-/** For comparing addresses: no IPv6 zone, lower case, IPv4-mapped as IPv4. */
-function plainAddress(address: string): string {
-  return address.toLowerCase().replace(/%.*$/, '').replace(/^::ffff:(?=\d+\.\d+\.\d+\.\d+$)/, '');
 }
 
 /**
@@ -271,6 +269,7 @@ export class PrinterCamera implements CameraStreamingDelegate {
       state: 'binding',
       socket,
       peer: request.targetAddress,
+      peerKey: peerAddress(request.targetAddress),
       ipv6,
       targetPort: request.video.port,
       srtpKey: request.video.srtp_key,
@@ -349,7 +348,7 @@ export class PrinterCamera implements CameraStreamingDelegate {
    */
   #datagram(stream: Stream, packet: Buffer, sender: RemoteInfo): void {
     if (stream.state !== 'running') return;
-    if (plainAddress(sender.address) !== plainAddress(stream.peer) || !looksLikeRtcp(packet)) return;
+    if (!isSamePeer(stream.peerKey, sender.address) || !looksLikeRtcp(packet)) return;
     if (stream.lastRtcp === null) this.#options.log?.log(`[${this.#options.name}] receiving RTCP from the viewer`);
     stream.lastRtcp = Date.now();
   }
