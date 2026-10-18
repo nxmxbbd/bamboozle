@@ -55,7 +55,10 @@ export async function serve(config: Config, options: ServeOptions): Promise<() =
   log.log(`bridge "${config.bridge.name}" on port ${config.bridge.port} (${where})${options.simulate ? ', SIMULATED printers' : ''}`);
   const announce = (paired: boolean) => {
     if (paired) log.log('paired with a Home app');
-    else log.log(`not paired: in the Home app choose Add Accessory, then More options, then "${config.bridge.name}", and enter ${bridge.identity.pincode}`);
+    else {
+      log.log(`not paired: in the Home app choose Add Accessory, then More options, then "${config.bridge.name}", and enter ${bridge.identity.pincode}`);
+      log.log(`setup URI (encode as a QR code to scan instead): ${bridge.setupURI}`);
+    }
   };
   announce(bridge.isPaired());
   bridge.onPairingChange(announce);
