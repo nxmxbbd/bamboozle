@@ -1,0 +1,139 @@
+import { randomBytes, randomInt } from 'node:crypto';
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { Accessory, Bridge, Characteristic, HAPStorage, Service, uuid } from 'hap-nodejs';
+import { VERSION } from '../version.ts';
+import { ADVERTISER_CIAO, CATEGORY_BRIDGE, EVENT_PAIRED, EVENT_UNPAIRED } from './hap-constants.ts';
+
+export interface BridgeIdentity {
+  /** HAP "username": a locally administered MAC address. */
+  username: string;
+  /** Setup code, XXX-XX-XXX. */
+  pincode: string;
+  setupID: string;
+}
+
+// Codes HomeKit refuses: repeated digits and the two obvious sequences.
+const DISALLOWED_CODES = new Set([
+  ...Array.from({ length: 10 }, (_, digit) => String(digit).repeat(8)),
+  '12345678',
+  '87654321',
+]);
+
+export function generatePincode(): string {
+  for (;;) {
+    const digits = Array.from({ length: 8 }, () => randomInt(10)).join('');
+    if (!DISALLOWED_CODES.has(digits)) return `${digits.slice(0, 3)}-${digits.slice(3, 5)}-${digits.slice(5)}`;
+  }
+}
+
+export function generateUsername(): string {
+  const bytes = randomBytes(6);
+  bytes[0] = ((bytes[0] as number) & 0xfc) | 0x02; // unicast, locally administered
+  return [...bytes].map((byte) => byte.toString(16).toUpperCase().padStart(2, '0')).join(':');
+}
+
+const SETUP_ID_ALPHABET = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+
+export function generateSetupId(): string {
+  return Array.from({ length: 4 }, () => SETUP_ID_ALPHABET[randomInt(SETUP_ID_ALPHABET.length)]).join('');
+}
+
+const USERNAME = /^([0-9A-F]{2}:){5}[0-9A-F]{2}$/;
+const PINCODE = /^\d{3}-\d{2}-\d{3}$/;
+const SETUP_ID = /^[0-9A-Z]{4}$/;
+
+function isIdentity(value: unknown): value is BridgeIdentity {
+  if (typeof value !== 'object' || value === null) return false;
+  const v = value as Record<string, unknown>;
+  return (
+    typeof v['username'] === 'string' && USERNAME.test(v['username']) &&
+    typeof v['pincode'] === 'string' && PINCODE.test(v['pincode']) &&
+    !DISALLOWED_CODES.has(v['pincode'].replaceAll('-', '')) &&
+    typeof v['setupID'] === 'string' && SETUP_ID.test(v['setupID'])
+  );
+}
+
+/**
+ * The bridge identity is created once and then reused: changing it makes the
+ * Home app see a new, unpaired bridge.
+ */
+export function loadOrCreateIdentity(storagePath: string): BridgeIdentity {
+  const file = join(storagePath, 'bridge.json');
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(file, 'utf8'));
+    if (!isIdentity(parsed)) throw new Error(`${file} is not a valid bridge identity; fix or delete it`);
+    return parsed;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  }
+  const identity: BridgeIdentity = { username: generateUsername(), pincode: generatePincode(), setupID: generateSetupId() };
+  mkdirSync(storagePath, { recursive: true, mode: 0o700 });
+  writeFileSync(file, `${JSON.stringify(identity, null, 2)}\n`, { mode: 0o600 });
+  chmodSync(file, 0o600);
+  return identity;
+}
+
+export interface BridgeOptions {
+  name: string;
+  port: number;
+  /** Interfaces or addresses to serve and advertise on; all when undefined. */
+  bind?: string[];
+  storagePath: string;
+}
+
+export interface RunningBridge {
+  identity: BridgeIdentity;
+  setupURI: string;
+  isPaired(): boolean;
+  onPairingChange(listener: (paired: boolean) => void): void;
+  stop(): Promise<void>;
+}
+
+export async function startBridge(options: BridgeOptions, accessories: Accessory[]): Promise<RunningBridge> {
+  const hapStorage = join(options.storagePath, 'hap');
+  mkdirSync(hapStorage, { recursive: true, mode: 0o700 });
+  HAPStorage.setCustomStoragePath(hapStorage);
+
+  const identity = loadOrCreateIdentity(options.storagePath);
+  const bridge = new Bridge(options.name, uuid.generate('bamboozle:bridge'));
+  bridge
+    .getService(Service.AccessoryInformation)!
+    .setCharacteristic(Characteristic.Manufacturer, 'bamboozle')
+    .setCharacteristic(Characteristic.Model, 'LAN bridge')
+    .setCharacteristic(Characteristic.SerialNumber, identity.username)
+    .setCharacteristic(Characteristic.FirmwareRevision, VERSION);
+  bridge.addBridgedAccessories(accessories);
+
+  let paired = false;
+  const listeners: Array<(paired: boolean) => void> = [];
+  const setPaired = (value: boolean) => {
+    if (value === paired) return;
+    paired = value;
+    for (const listener of listeners) listener(value);
+  };
+  bridge.on(EVENT_PAIRED, () => setPaired(true));
+  bridge.on(EVENT_UNPAIRED, () => setPaired(false));
+
+  await bridge.publish({
+    username: identity.username,
+    pincode: identity.pincode,
+    setupID: identity.setupID,
+    port: options.port,
+    category: CATEGORY_BRIDGE,
+    advertiser: ADVERTISER_CIAO,
+    ...(options.bind ? { bind: options.bind } : {}),
+  });
+
+  // HAP-NodeJS has no public "is paired" getter; read the loaded pairing table.
+  const info = (bridge as unknown as { _accessoryInfo?: { pairedClients?: Record<string, unknown> } })._accessoryInfo;
+  paired = Object.keys(info?.pairedClients ?? {}).length > 0;
+
+  return {
+    identity,
+    setupURI: bridge.setupURI(),
+    isPaired: () => paired,
+    onPairingChange: (listener) => listeners.push(listener),
+    stop: () => bridge.unpublish(),
+  };
+}

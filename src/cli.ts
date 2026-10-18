@@ -3,9 +3,15 @@ import { parseArgs } from 'node:util';
 import { loadConfig } from './config.ts';
 import { PrinterClient } from './printer/client.ts';
 import { filePinStore } from './printer/pinned-tls.ts';
+import { serve } from './serve.ts';
 
-const USAGE = `usage: bamboozle probe --config <file> [--timeout <seconds>]
+const USAGE = `usage:
+  bamboozle serve --config <file> [--simulate]
+  bamboozle probe --config <file> [--timeout <seconds>]
 
+  serve   run the HomeKit bridge for every configured printer
+          --simulate  feed a simulated print cycle instead of the printers,
+                      to see how each display style looks in the Home app
   probe   connect to every configured printer, request one full status,
           print it as JSON and exit (no HomeKit, nothing else sent)`;
 
@@ -43,6 +49,17 @@ async function probe(configPath: string, timeoutSeconds: number): Promise<number
   return results.every((result) => result.ok) ? 0 : 1;
 }
 
+async function runServe(configPath: string, simulate: boolean): Promise<number> {
+  const stop = await serve(loadConfig(configPath), { simulate });
+  await new Promise<void>((resolve) => {
+    process.once('SIGINT', resolve);
+    process.once('SIGTERM', resolve);
+  });
+  console.log('stopping');
+  await stop();
+  return 0;
+}
+
 async function main(argv: string[]): Promise<number> {
   const { values, positionals } = parseArgs({
     args: argv,
@@ -50,6 +67,7 @@ async function main(argv: string[]): Promise<number> {
     options: {
       config: { type: 'string', short: 'c' },
       timeout: { type: 'string', default: '20' },
+      simulate: { type: 'boolean', default: false },
       help: { type: 'boolean', short: 'h' },
     },
   });
@@ -58,7 +76,7 @@ async function main(argv: string[]): Promise<number> {
     console.log(USAGE);
     return command === undefined && !values.help ? 2 : 0;
   }
-  if (command !== 'probe') {
+  if (command !== 'probe' && command !== 'serve') {
     console.error(`unknown command: ${command}\n\n${USAGE}`);
     return 2;
   }
@@ -66,6 +84,8 @@ async function main(argv: string[]): Promise<number> {
     console.error(`--config is required\n\n${USAGE}`);
     return 2;
   }
+  if (command === 'serve') return runServe(values.config, values.simulate);
+
   const timeout = Number(values.timeout);
   if (!Number.isFinite(timeout) || timeout <= 0) {
     console.error('--timeout must be a positive number of seconds');
