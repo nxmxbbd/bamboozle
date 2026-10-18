@@ -72,6 +72,7 @@ before(async () => {
     serial: 'SERIAL1',
     model: 'H2C',
     progress: ['humidity', 'window', 'fan', 'lightbulb'],
+    countdown: ['lux'],
     temperatures: ['chamber', 'nozzle', 'bed'],
     layout: 'grouped',
   });

@@ -26,7 +26,7 @@ export interface PrinterAccessoryOptions {
   serial: string;
   model?: string;
   progress: readonly ProgressStyle[];
-  /** Defaults to ['lux']. */
+  /** Defaults to none. */
   countdown?: readonly CountdownStyle[];
   temperatures: readonly TemperatureSensor[];
   /** grouped: one accessory with several services; separate: one tile each. */
@@ -36,9 +36,6 @@ export interface PrinterAccessoryOptions {
 // Writes from the Home app (or Siri) to a repurposed control are accepted and
 // then undone after this delay, so the tile settles back on the real value.
 export const SNAP_BACK_MS = 300;
-
-// Valve durations are widened from the spec's one hour to three days.
-export const MAX_VALVE_SECONDS = 72 * 3600;
 
 const TEMPERATURE_LABELS: Record<TemperatureSensor, string> = {
   chamber: 'Chamber',
@@ -79,7 +76,7 @@ export class PrinterAccessories {
 
     this.#addStatusServices();
     for (const style of progress) this.#addProgress(style);
-    for (const style of options.countdown ?? ['lux']) this.#addCountdown(style);
+    for (const style of options.countdown ?? []) this.#addCountdown(style);
     for (const sensor of temperatures) this.#addTemperature(sensor);
   }
 
@@ -210,30 +207,11 @@ export class PrinterAccessories {
     }
   }
 
-  #addCountdown(style: CountdownStyle): void {
-    if (style === 'lux') {
-      const service = this.#service(Service.LightSensor, 'remaining', 'Minutes left');
-      this.#bind(service.getCharacteristic(Characteristic.CurrentAmbientLightLevel), (v) =>
-        remainingToLux(v.remainingMinutes),
-      );
-      return;
-    }
-    const sprinkler = style === 'sprinkler';
-    const service = this.#service(Service.Valve, `remaining-${style}`, sprinkler ? 'Time Left Sprinkler' : 'Time Left');
-    this.#bind(service.getCharacteristic(Characteristic.ValveType), () =>
-      sprinkler ? Characteristic.ValveType.IRRIGATION : Characteristic.ValveType.GENERIC_VALVE,
+  #addCountdown(_style: CountdownStyle): void {
+    const service = this.#service(Service.LightSensor, 'remaining', 'Minutes left');
+    this.#bind(service.getCharacteristic(Characteristic.CurrentAmbientLightLevel), (v) =>
+      remainingToLux(v.remainingMinutes),
     );
-    const running = (v: DisplayValues) => (v.printing ? 1 : 0);
-    this.#bindReadOnly(service.getCharacteristic(Characteristic.Active), running);
-    this.#bind(service.getCharacteristic(Characteristic.InUse), running);
-    const seconds = (v: DisplayValues) => Math.min(v.remainingMinutes * 60, MAX_VALVE_SECONDS);
-    // The spec caps both durations at 3600 s; prints run for many hours.
-    const remaining = service.getCharacteristic(Characteristic.RemainingDuration);
-    remaining.setProps({ maxValue: MAX_VALVE_SECONDS });
-    this.#bind(remaining, seconds);
-    const duration = service.getCharacteristic(Characteristic.SetDuration);
-    duration.setProps({ maxValue: MAX_VALVE_SECONDS });
-    this.#bindReadOnly(duration, seconds);
   }
 
   #addTemperature(sensor: TemperatureSensor): void {

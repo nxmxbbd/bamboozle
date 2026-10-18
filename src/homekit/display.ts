@@ -3,10 +3,10 @@ import type { PrinterStatus } from '../printer/status.ts';
 export const PROGRESS_STYLES = ['humidity', 'window', 'fan', 'lightbulb'] as const;
 export type ProgressStyle = (typeof PROGRESS_STYLES)[number];
 
-// How time left is shown: a light sensor (lux = minutes; sensors only appear
-// in the Home app's status bar, not as tiles) or a valve, which gets a tile
-// and a native countdown in the Home app.
-export const COUNTDOWN_STYLES = ['lux', 'valve', 'sprinkler'] as const;
+// Time left as a light sensor (lux = minutes). Sensors only appear in the
+// Home app's status bar, not as tiles, so this is off by default: the camera
+// overlay shows time left, and the sensor remains useful for automations.
+export const COUNTDOWN_STYLES = ['lux'] as const;
 export type CountdownStyle = (typeof COUNTDOWN_STYLES)[number];
 
 export const TEMPERATURE_SENSORS = ['chamber', 'nozzle', 'bed'] as const;

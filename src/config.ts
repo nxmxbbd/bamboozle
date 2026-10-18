@@ -129,8 +129,8 @@ function parseDisplay(value: unknown): DisplayConfig {
   const layout = raw['layout'] ?? 'grouped';
   if (layout !== 'grouped' && layout !== 'separate') throw new ConfigError('display.layout must be "grouped" or "separate"');
   return {
-    progress: pickList(raw['progress'], PROGRESS_STYLES, ['humidity'], 'display.progress'),
-    countdown: pickList(raw['countdown'], COUNTDOWN_STYLES, ['lux'], 'display.countdown'),
+    progress: pickList(raw['progress'], PROGRESS_STYLES, ['fan'], 'display.progress'),
+    countdown: pickList(raw['countdown'], COUNTDOWN_STYLES, [], 'display.countdown'),
     temperatures: pickList(raw['temperatures'], TEMPERATURE_SENSORS, ['chamber'], 'display.temperatures'),
     layout,
   };
