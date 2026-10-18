@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process';
-import { createSocket, type Socket } from 'node:dgram';
+import { createSocket, type RemoteInfo, type Socket } from 'node:dgram';
 import {
   Accessory,
   CameraController,
@@ -9,6 +9,7 @@ import {
   type CameraStreamingDelegate,
   type PrepareStreamCallback,
   type PrepareStreamRequest,
+  type PrepareStreamResponse,
   type SnapshotRequest,
   type SnapshotRequestCallback,
   type StreamingRequest,
@@ -39,6 +40,10 @@ export interface PrinterCameraOptions {
   log?: Pick<Console, 'log' | 'warn'>;
   /** A stream whose receiver sent RTCP and then went quiet this long is ended. */
   streamIdleMs?: number;
+  /** A prepared stream that is never started gives its port back after this. */
+  preparedTtlMs?: number;
+  /** Test seam: called with each stream's UDP socket right after it is created. */
+  onStreamSocket?: (sessionID: string, socket: Socket) => void;
 }
 
 // 16:9 only: the overlay canvas is 16:9 and must not be stretched.
@@ -62,26 +67,35 @@ const MAX_HEIGHT = 2160;
 
 const DEFAULT_STREAM_IDLE_MS = 30_000;
 const IDLE_CHECK_MS = 5_000;
-/** A prepared stream that is never started gives its port back after this. */
-const PREPARED_TTL_MS = 30_000;
+const DEFAULT_PREPARED_TTL_MS = 30_000;
 
-interface Pending {
-  targetAddress: string;
+/**
+ * binding → prepared → starting → running, and from any of them → ending.
+ * 'ending' lasts until the socket is closed and ffmpeg has exited.
+ */
+type StreamState = 'binding' | 'prepared' | 'starting' | 'running' | 'ending';
+
+/** One live-video session, from prepareStream until it has fully ended. */
+interface Stream {
+  state: StreamState;
+  /** Bound to the port we advertise for the session (see #datagram). */
+  socket: Socket;
+  /** The prepare request's target address: the only sender whose RTCP counts. */
+  peer: string;
   ipv6: boolean;
   targetPort: number;
   srtpKey: Buffer;
   srtpSalt: Buffer;
   ssrc: number;
-  /** Bound to the port we advertised: the receiver's RTCP arrives here. */
-  socket: Socket;
-  expiry: NodeJS.Timeout;
-}
-
-interface Session {
-  child: ChildProcess;
-  socket: Socket;
-  watchdog: NodeJS.Timeout;
+  /** Gives the port back when a prepared stream is never started. */
+  expiry: NodeJS.Timeout | null;
+  child: ChildProcess | null;
+  watchdog: NodeJS.Timeout | null;
   lastRtcp: number | null;
+  /** HomeKit callbacks not answered yet; each is answered exactly once. */
+  onPrepared: PrepareStreamCallback | null;
+  onStarted: StreamRequestCallback | null;
+  ending: Promise<void> | null;
 }
 
 interface CachedSnapshot {
@@ -105,14 +119,31 @@ function closeSocket(socket: Socket): void {
   }
 }
 
+/** An RTCP header: version 2 and a packet type from 200 (SR) to 206 (PSFB). */
+function looksLikeRtcp(packet: Buffer): boolean {
+  return packet.length >= 8 && packet[0]! >> 6 === 2 && packet[1]! >= 200 && packet[1]! <= 206;
+}
+
+/** For comparing addresses: no IPv6 zone, lower case, IPv4-mapped as IPv4. */
+function plainAddress(address: string): string {
+  return address.toLowerCase().replace(/%.*$/, '').replace(/^::ffff:(?=\d+\.\d+\.\d+\.\d+$)/, '');
+}
+
 /**
  * The camera of one printer: snapshots for the Home tile and live video,
  * both with the status overlay.
  *
  * Snapshots are served stale-while-revalidate (a slow ffmpeg never blocks
  * the bridge), validated, rendered one at a time and cached for a few sizes.
- * Each live stream is one ffmpeg; it ends on STOP, when ffmpeg exits, or
- * when the receiver's RTCP goes quiet.
+ *
+ * Each live stream is one record, registered before anything asynchronous
+ * happens and dropped only once its socket is closed and its ffmpeg has
+ * exited, so STOP or stop() at any moment finds and ends it. A stream ends
+ * on STOP, when ffmpeg exits, on a socket error, or when the viewer's RTCP
+ * goes quiet. That last one rests on an ASSUMPTION not yet verified against
+ * a real Home app: that the viewer sends RTCP to the port we advertised. It
+ * is failure-safe: if no RTCP ever arrives, the idle check is never armed
+ * and a stream is never ended on a guess.
  */
 export class PrinterCamera implements CameraStreamingDelegate {
   readonly accessory: Accessory;
@@ -121,8 +152,8 @@ export class PrinterCamera implements CameraStreamingDelegate {
   readonly #files: OverlayFiles;
   readonly #filter: string;
   readonly #idleMs: number;
-  readonly #pending = new Map<string, Pending>();
-  readonly #sessions = new Map<string, Session>();
+  readonly #preparedTtlMs: number;
+  readonly #streams = new Map<string, Stream>();
   readonly #snapshots = new Map<string, CachedSnapshot>();
   readonly #rendering = new Map<string, Promise<Buffer>>();
   readonly #abort = new AbortController();
@@ -133,6 +164,7 @@ export class PrinterCamera implements CameraStreamingDelegate {
   constructor(options: PrinterCameraOptions) {
     this.#options = options;
     this.#idleMs = options.streamIdleMs ?? DEFAULT_STREAM_IDLE_MS;
+    this.#preparedTtlMs = options.preparedTtlMs ?? DEFAULT_PREPARED_TTL_MS;
     this.#files = new OverlayFiles(options.overlayDir);
     this.#filter = overlayFilter(this.#files, options.fonts);
 
@@ -156,8 +188,16 @@ export class PrinterCamera implements CameraStreamingDelegate {
     this.accessory.configureController(this.controller);
   }
 
+  /** Streams sending video. */
   get activeStreams(): number {
-    return this.#sessions.size;
+    let running = 0;
+    for (const stream of this.#streams.values()) if (stream.state === 'running') running++;
+    return running;
+  }
+
+  /** Streams in any state, including those being set up or torn down. */
+  get trackedStreams(): number {
+    return this.#streams.size;
   }
 
   get cachedSnapshotSizes(): number {
@@ -222,50 +262,98 @@ export class PrinterCamera implements CameraStreamingDelegate {
   // --- live video --------------------------------------------------------------
 
   prepareStream(request: PrepareStreamRequest, callback: PrepareStreamCallback): void {
+    const { sessionID } = request;
     if (this.#stopping) return callback(new Error('camera is stopping'));
+    if (this.#streams.has(sessionID)) return callback(new Error('stream is already prepared'));
     const ipv6 = request.addressVersion === 'ipv6';
     const socket = createSocket(ipv6 ? 'udp6' : 'udp4');
-    let bound = false;
+    const stream: Stream = {
+      state: 'binding',
+      socket,
+      peer: request.targetAddress,
+      ipv6,
+      targetPort: request.video.port,
+      srtpKey: request.video.srtp_key,
+      srtpSalt: request.video.srtp_salt,
+      ssrc: CameraController.generateSynchronisationSource(),
+      expiry: null,
+      child: null,
+      watchdog: null,
+      lastRtcp: null,
+      onPrepared: callback,
+      onStarted: null,
+      ending: null,
+    };
+    // Registered before the first asynchronous step, so STOP or stop() finds it.
+    this.#streams.set(sessionID, stream);
     // Permanent listener: an 'error' with no listener would crash the process.
-    socket.on('error', (error) => {
-      closeSocket(socket);
-      if (!bound) callback(error);
-      else this.#options.log?.warn(`[${this.#options.name}] stream socket error: ${error.message}`);
-    });
+    socket.on('error', (error) => this.#socketError(sessionID, stream, error));
+    socket.on('message', (packet, sender) => this.#datagram(stream, packet, sender));
+    this.#options.onStreamSocket?.(sessionID, socket);
     socket.bind(0, () => {
-      bound = true;
-      const ssrc = CameraController.generateSynchronisationSource();
-      const expiry = setTimeout(() => this.#dropPending(request.sessionID), PREPARED_TTL_MS);
-      this.#pending.set(request.sessionID, {
-        targetAddress: request.targetAddress,
-        ipv6,
-        targetPort: request.video.port,
-        srtpKey: request.video.srtp_key,
-        srtpSalt: request.video.srtp_salt,
-        ssrc,
-        socket,
-        expiry,
-      });
-      callback(undefined, {
-        video: { port: socket.address().port, ssrc, srtp_key: request.video.srtp_key, srtp_salt: request.video.srtp_salt },
+      // A socket closed while binding never gets here; this covers a
+      // cancellation that left it open.
+      if (stream.state !== 'binding' || this.#stopping) {
+        closeSocket(socket);
+        this.#answerPrepare(stream, new Error(this.#stopping ? 'camera is stopping' : 'cancelled'));
+        if (stream.state === 'binding') void this.#end(sessionID, stream);
+        return;
+      }
+      stream.state = 'prepared';
+      stream.expiry = setTimeout(() => {
+        this.#options.log?.log(`[${this.#options.name}] prepared stream was never started; releasing its port`);
+        void this.#end(sessionID, stream);
+      }, this.#preparedTtlMs);
+      this.#answerPrepare(stream, undefined, {
+        video: { port: socket.address().port, ssrc: stream.ssrc, srtp_key: stream.srtpKey, srtp_salt: stream.srtpSalt },
       });
     });
   }
 
-  #dropPending(sessionID: string): Pending | undefined {
-    const pending = this.#pending.get(sessionID);
-    if (!pending) return undefined;
-    this.#pending.delete(sessionID);
-    clearTimeout(pending.expiry);
-    return pending;
+  #answerPrepare(stream: Stream, error?: Error, response?: PrepareStreamResponse): void {
+    const callback = stream.onPrepared;
+    stream.onPrepared = null;
+    callback?.(error, response);
+  }
+
+  #answerStart(stream: Stream, error?: Error): void {
+    const callback = stream.onStarted;
+    stream.onStarted = null;
+    callback?.(error);
+  }
+
+  #socketError(sessionID: string, stream: Stream, error: Error): void {
+    if (stream.state === 'ending') return;
+    const { name, log } = this.#options;
+    if (stream.state === 'binding') {
+      log?.warn(`[${name}] stream socket failed to bind: ${error.message}`);
+      this.#answerPrepare(stream, error);
+      void this.#end(sessionID, stream);
+      return;
+    }
+    log?.warn(`[${name}] stream socket error: ${error.message}; ending the stream`);
+    this.#answerStart(stream, error);
+    if (stream.state === 'running') this.#endAndTell(sessionID, stream);
+    else void this.#end(sessionID, stream);
+  }
+
+  /**
+   * Viewer activity, for the idle check. ASSUMPTION, not yet verified
+   * against a real Home app: the viewer sends its RTCP to the port we
+   * advertised in the prepare response. Only RTCP-shaped packets from the
+   * prepare request's address count; anything else is ignored.
+   */
+  #datagram(stream: Stream, packet: Buffer, sender: RemoteInfo): void {
+    if (stream.state !== 'running') return;
+    if (plainAddress(sender.address) !== plainAddress(stream.peer) || !looksLikeRtcp(packet)) return;
+    if (stream.lastRtcp === null) this.#options.log?.log(`[${this.#options.name}] receiving RTCP from the viewer`);
+    stream.lastRtcp = Date.now();
   }
 
   handleStreamRequest(request: StreamingRequest, callback: StreamRequestCallback): void {
     if (request.type === STREAM_START) return this.#start(request.sessionID, request.video, callback);
     if (request.type === STREAM_RECONFIGURE) return callback(); // keeps the running encoder settings
     if (request.type === STREAM_STOP) {
-      const pending = this.#dropPending(request.sessionID);
-      if (pending) closeSocket(pending.socket);
       void this.#end(request.sessionID).then(() => callback());
       return;
     }
@@ -274,13 +362,13 @@ export class PrinterCamera implements CameraStreamingDelegate {
 
   #start(sessionID: string, video: Extract<StreamingRequest, { type: typeof STREAM_START }>['video'], callback: StreamRequestCallback): void {
     const { name, ffmpeg, source } = this.#options;
-    const pending = this.#dropPending(sessionID);
-    if (!pending) return callback(new Error('stream was not prepared'));
-    if (this.#stopping) {
-      closeSocket(pending.socket);
-      return callback(new Error('camera is stopping'));
-    }
-    const { socket, expiry: _expiry, ...target } = pending;
+    const stream = this.#streams.get(sessionID);
+    // stop() has already moved every stream to 'ending'.
+    if (!stream || stream.state !== 'prepared') return callback(new Error(this.#stopping ? 'camera is stopping' : 'stream was not prepared'));
+    stream.state = 'starting';
+    stream.onStarted = callback;
+    if (stream.expiry) clearTimeout(stream.expiry);
+    stream.expiry = null;
     const args = streamArgs(source, this.#filter, ffmpeg, {
       width: video.width,
       height: video.height,
@@ -289,78 +377,94 @@ export class PrinterCamera implements CameraStreamingDelegate {
       profile: video.profile,
       payloadType: video.pt,
       mtu: video.mtu,
-      ...target,
+      ssrc: stream.ssrc,
+      targetAddress: stream.peer,
+      ipv6: stream.ipv6,
+      targetPort: stream.targetPort,
+      srtpKey: stream.srtpKey,
+      srtpSalt: stream.srtpSalt,
     });
 
-    const child = spawn(ffmpeg.path, args, { stdio: ['ignore', 'ignore', 'pipe'] });
-    let started = false;
-    let failed = false;
+    let child: ChildProcess;
+    try {
+      child = spawn(ffmpeg.path, args, { stdio: ['ignore', 'ignore', 'pipe'] });
+    } catch (error) {
+      // Invalid arguments (such as a NUL byte in the path) throw instead of emitting 'error'.
+      this.#options.log?.warn(`[${name}] stream failed to start: ${(error as Error).message}`);
+      this.#answerStart(stream, error as Error);
+      void this.#end(sessionID, stream);
+      return;
+    }
+    stream.child = child;
     let stderr = '';
     child.stderr?.on('data', (chunk: Buffer) => (stderr = (stderr + chunk.toString()).slice(-2000)));
 
     child.once('spawn', () => {
-      started = true;
-      const session: Session = {
-        child,
-        socket,
-        lastRtcp: null,
-        watchdog: setInterval(() => {
-          // Armed only once RTCP has been seen: never end a stream on a guess.
-          if (session.lastRtcp !== null && Date.now() - session.lastRtcp > this.#idleMs) {
-            this.#options.log?.warn(`[${name}] stream receiver went quiet; ending the stream`);
-            this.#endAndTell(sessionID);
-          }
-        }, Math.min(IDLE_CHECK_MS, this.#idleMs)),
-      };
-      socket.on('message', () => {
-        if (session.lastRtcp === null) this.#options.log?.log(`[${name}] receiving RTCP from the viewer`);
-        session.lastRtcp = Date.now();
-      });
-      this.#sessions.set(sessionID, session);
+      if (stream.state !== 'starting') {
+        // STOP or stop() came in while it was starting; that is ending it.
+        this.#answerStart(stream, new Error('cancelled'));
+        void this.#end(sessionID, stream);
+        return;
+      }
+      stream.state = 'running';
+      stream.watchdog = setInterval(() => {
+        // Armed only once RTCP has been seen: never end a stream on a guess.
+        if (stream.state === 'running' && stream.lastRtcp !== null && Date.now() - stream.lastRtcp > this.#idleMs) {
+          this.#options.log?.warn(`[${name}] stream receiver went quiet; ending the stream`);
+          this.#endAndTell(sessionID, stream);
+        }
+      }, Math.min(IDLE_CHECK_MS, this.#idleMs));
       this.#options.log?.log(`[${name}] streaming ${video.width}x${video.height}@${video.fps} ${video.max_bit_rate} kbit/s`);
-      callback();
+      this.#answerStart(stream);
     });
     // Permanent listener (a second 'error', e.g. from kill, must not crash).
     child.on('error', (error) => {
-      if (started) return; // 'close' handles a running process that fails
-      if (failed) return;
-      failed = true;
-      closeSocket(socket);
+      if (stream.state !== 'starting') return; // 'close' handles a running process that fails
       this.#options.log?.warn(`[${name}] stream failed to start: ${error.message}`);
-      callback(error);
+      this.#answerStart(stream, error);
+      void this.#end(sessionID, stream);
     });
     child.once('close', (code, signal) => {
-      const session = this.#sessions.get(sessionID);
-      if (!session || session.child !== child) return; // ended deliberately
+      if (stream.state !== 'running') return; // ended deliberately, or never started
       this.#options.log?.warn(`[${name}] stream ended (${signal ?? code}): ${stderr.trim().split('\n').slice(-2).join(' | ')}`);
-      this.#endAndTell(sessionID);
+      this.#endAndTell(sessionID, stream);
     });
   }
 
-  /** End a stream we decided to end, and tell the Home app right away. */
-  #endAndTell(sessionID: string): void {
-    void this.#end(sessionID); // drops the session at once; the process stops in the background
+  /** End a running stream we decided to end, and tell the Home app right away. */
+  #endAndTell(sessionID: string, stream: Stream): void {
+    void this.#end(sessionID, stream); // no longer active at once; ffmpeg stops in the background
     this.controller.forceStopStreamingSession(sessionID);
   }
 
-  /** End a stream session; safe to call more than once. */
-  async #end(sessionID: string): Promise<void> {
-    const session = this.#sessions.get(sessionID);
-    if (!session) return;
-    this.#sessions.delete(sessionID);
-    clearInterval(session.watchdog);
-    closeSocket(session.socket);
-    await stopProcess(session.child);
+  /**
+   * End a stream in any state. Idempotent: every caller gets the same
+   * promise, which settles once the socket is closed and ffmpeg has exited;
+   * only then is the record dropped. Unanswered HomeKit callbacks fail.
+   */
+  #end(sessionID: string, stream = this.#streams.get(sessionID)): Promise<void> {
+    if (!stream) return Promise.resolve();
+    if (stream.ending) return stream.ending;
+    stream.state = 'ending';
+    if (stream.expiry) clearTimeout(stream.expiry);
+    if (stream.watchdog) clearInterval(stream.watchdog);
+    stream.expiry = null;
+    stream.watchdog = null;
+    closeSocket(stream.socket);
+    const reason = new Error(this.#stopping ? 'camera is stopping' : 'cancelled');
+    this.#answerPrepare(stream, reason);
+    this.#answerStart(stream, reason);
+    const { child } = stream;
+    stream.ending = (child ? stopProcess(child) : Promise.resolve()).then(() => {
+      if (this.#streams.get(sessionID) === stream) this.#streams.delete(sessionID);
+    });
+    return stream.ending;
   }
 
   /** Refuse new work, cancel snapshot renders and end every stream. */
   async stop(): Promise<void> {
     this.#stopping = true;
     this.#abort.abort();
-    for (const id of [...this.#pending.keys()]) {
-      const pending = this.#dropPending(id);
-      if (pending) closeSocket(pending.socket);
-    }
-    await Promise.all([this.#queue, ...[...this.#sessions.keys()].map((id) => this.#end(id))]);
+    await Promise.all([this.#queue, ...[...this.#streams].map(([id, stream]) => this.#end(id, stream))]);
   }
 }

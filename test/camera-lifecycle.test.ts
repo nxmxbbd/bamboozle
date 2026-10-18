@@ -1,10 +1,11 @@
 // Regression tests for camera lifecycle findings (spawn failure, idle
-// streams, snapshot bounds, shutdown).
+// streams, STOP / stop() racing setup, socket errors, RTCP filtering,
+// snapshot bounds, shutdown).
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { createSocket } from 'node:dgram';
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createSocket, type Socket } from 'node:dgram';
+import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PrinterCamera, SNAPSHOT_CACHE_SIZES, SNAPSHOT_QUEUE_LIMIT, type PrinterCameraOptions } from '../src/camera/camera.ts';
@@ -86,18 +87,21 @@ async function prepare(cam: PrinterCamera, sessionID: string, targetPort: number
   );
 }
 
+function startRequest(sessionID: string): never {
+  return {
+    sessionID,
+    type: STREAM_START,
+    video: { codec: 0, profile: 1, level: 2, packetizationMode: 0, width: 320, height: 180, fps: 15, pt: 99, ssrc: 1, max_bit_rate: 200, rtcp_interval: 0.5, mtu: 1378 },
+    audio: {} as never,
+  } as never;
+}
+
 function start(cam: PrinterCamera, sessionID: string): Promise<void> {
-  return new Promise((resolve, reject) =>
-    cam.handleStreamRequest(
-      {
-        sessionID,
-        type: STREAM_START,
-        video: { codec: 0, profile: 1, level: 2, packetizationMode: 0, width: 320, height: 180, fps: 15, pt: 99, ssrc: 1, max_bit_rate: 200, rtcp_interval: 0.5, mtu: 1378 },
-        audio: {} as never,
-      } as never,
-      (error) => (error ? reject(error) : resolve()),
-    ),
-  );
+  return new Promise((resolve, reject) => cam.handleStreamRequest(startRequest(sessionID), (error) => (error ? reject(error) : resolve())));
+}
+
+function stopStream(cam: PrinterCamera, sessionID: string): Promise<void> {
+  return new Promise((resolve) => cam.handleStreamRequest({ sessionID, type: STREAM_STOP } as never, () => resolve()));
 }
 
 function spyForceStop(cam: PrinterCamera): string[] {
@@ -106,11 +110,71 @@ function spyForceStop(cam: PrinterCamera): string[] {
   return calls;
 }
 
+/** A receiver report header: version 2, one report block, packet type 201, length 1. */
+const RTCP_RR = Buffer.from([0x81, 0xc9, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01]);
+
+// A fake stream encoder: runs until it is signalled (exec, so the signal
+// reaches the process itself and nothing outlives it).
+const fakeStream = join(dir, 'fake-stream.sh');
+writeFileSync(fakeStream, '#!/bin/sh\nexec sleep 30\n');
+chmodSync(fakeStream, 0o755);
+const FAKE_STREAM: Partial<PrinterCameraOptions> = { ffmpeg: { path: fakeStream, encoder: 'libx264', vaapiDevice: '/dev/dri/renderD128' } };
+
+const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+async function waitFor(condition: () => boolean, ms: number): Promise<void> {
+  const deadline = Date.now() + ms;
+  while (!condition() && Date.now() < deadline) await delay(25);
+}
+
+/** Our own child processes that have not been reaped (Linux /proc; empty elsewhere). */
+function liveChildren(): number[] {
+  if (!existsSync('/proc/self/task')) return [];
+  const pids: number[] = [];
+  for (const task of readdirSync('/proc/self/task')) {
+    try {
+      pids.push(...readFileSync(`/proc/self/task/${task}/children`, 'utf8').split(' ').filter(Boolean).map(Number));
+    } catch {
+      // the thread is gone
+    }
+  }
+  return pids;
+}
+
+/** Child processes started since `before` was taken and still not reaped. */
+function newChildren(before: number[]): number[] {
+  return liveChildren().filter((pid) => !before.includes(pid));
+}
+
+/** Whether a UDP port (on all interfaces, as the camera binds) can be bound right now. */
+async function portIsFree(port: number): Promise<boolean> {
+  const probe = createSocket('udp4');
+  const free = await new Promise<boolean>((resolve) => {
+    probe.once('error', () => resolve(false));
+    probe.bind(port, () => resolve(true));
+  });
+  try {
+    probe.close();
+  } catch {
+    // never bound
+  }
+  return free;
+}
+
+async function boundTo(address: string): Promise<Socket | null> {
+  const socket = createSocket('udp4');
+  return new Promise((resolve) => {
+    socket.once('error', () => resolve(null));
+    socket.bind(0, address, () => resolve(socket));
+  });
+}
+
 test('a stream whose ffmpeg cannot be started fails START and holds no session', async () => {
   const cam = camera({ ffmpeg: { path: join(dir, 'no-such-ffmpeg'), encoder: 'libx264', vaapiDevice: '/dev/dri/renderD128' } });
   await prepare(cam, 'missing', 40000);
   await assert.rejects(start(cam, 'missing'), /ENOENT/);
   assert.equal(cam.activeStreams, 0);
+  assert.equal(cam.trackedStreams, 0);
   await cam.stop();
 });
 
@@ -125,7 +189,7 @@ test('a stream ends when the receiver sent RTCP and then went quiet', { skip: !h
     await start(cam, 'idle');
     const viewer = createSocket('udp4');
     for (let i = 0; i < 3; i++) {
-      viewer.send(Buffer.from([0x81, 0xc9, 0, 1]), rtcpPort, '127.0.0.1');
+      viewer.send(RTCP_RR, rtcpPort, '127.0.0.1');
       await new Promise((r) => setTimeout(r, 100));
     }
     viewer.close();
@@ -173,6 +237,182 @@ test('when ffmpeg exits on its own, the session is released and the Home app tol
     assert.equal(cam.activeStreams, 0);
   } finally {
     sink.close();
+    await cam.stop();
+  }
+});
+
+test('a prepared stream that is never started closes its socket and gives the port back', async () => {
+  const cam = camera({ preparedTtlMs: 150 });
+  try {
+    const port = await prepare(cam, 'expire', 40000);
+    assert.equal(await portIsFree(port), false, 'the advertised port is held while prepared');
+    await delay(500);
+    assert.equal(await portIsFree(port), true, 'the port can be bound again after expiry');
+    assert.equal(cam.trackedStreams, 0);
+    await assert.rejects(start(cam, 'expire'), /not prepared/);
+  } finally {
+    await cam.stop();
+  }
+});
+
+test('stop() while the stream socket is binding fails the prepare and leaves nothing behind', async () => {
+  const sockets: Socket[] = [];
+  const cam = camera({ onStreamSocket: (_id, socket) => void sockets.push(socket) });
+  const prepared = prepare(cam, 'binding', 40000);
+  await cam.stop();
+  await assert.rejects(prepared, /stopping/);
+  await delay(100); // a bind completing late must not bring it back
+  assert.equal(cam.trackedStreams, 0);
+  assert.equal(sockets.length, 1);
+  assert.throws(() => sockets[0]!.address(), { code: 'ERR_SOCKET_DGRAM_NOT_RUNNING' }, 'the socket is closed');
+});
+
+test('STOP right after START ends the stream; the encoder does not outlive it', async () => {
+  const cam = camera(FAKE_STREAM);
+  const forced = spyForceStop(cam);
+  const before = liveChildren();
+  try {
+    const port = await prepare(cam, 'stop-start', 40000);
+    const started = assert.rejects(start(cam, 'stop-start'), /cancelled/);
+    await stopStream(cam, 'stop-start');
+    assert.deepEqual(newChildren(before), [], 'the encoder has exited when STOP is answered');
+    await started;
+    await delay(200); // a late 'spawn' must not bring it back
+    assert.equal(cam.activeStreams, 0);
+    assert.equal(cam.trackedStreams, 0);
+    assert.equal(await portIsFree(port), true);
+    assert.deepEqual(forced, [], 'the Home app asked; no need to tell it');
+  } finally {
+    await cam.stop();
+  }
+});
+
+test('stop() right after START ends the stream; the encoder does not outlive it', async () => {
+  const cam = camera(FAKE_STREAM);
+  const before = liveChildren();
+  try {
+    const port = await prepare(cam, 'stop-during-start', 40000);
+    const started = assert.rejects(start(cam, 'stop-during-start'), /stopping/);
+    await cam.stop();
+    assert.deepEqual(newChildren(before), [], 'the encoder has exited when stop() resolves');
+    await started;
+    await delay(200);
+    assert.equal(cam.activeStreams, 0);
+    assert.equal(cam.trackedStreams, 0);
+    assert.equal(await portIsFree(port), true);
+  } finally {
+    await cam.stop();
+  }
+});
+
+test('STOP right after a START whose ffmpeg is missing answers both and leaves nothing behind', { timeout: 5000 }, async () => {
+  const cam = camera({ ffmpeg: { path: join(dir, 'no-such-ffmpeg'), encoder: 'libx264', vaapiDevice: '/dev/dri/renderD128' } });
+  try {
+    const port = await prepare(cam, 'missing-stop', 40000);
+    const started = assert.rejects(start(cam, 'missing-stop'));
+    // The child never started: ending it must not signal it or wait for an exit that never comes.
+    await stopStream(cam, 'missing-stop');
+    await started;
+    assert.equal(cam.trackedStreams, 0);
+    assert.equal(await portIsFree(port), true);
+  } finally {
+    await cam.stop();
+  }
+});
+
+test('a spawn that throws fails START and releases the port', async () => {
+  const cam = camera({ ffmpeg: { path: join(dir, 'ff\u0000mpeg'), encoder: 'libx264', vaapiDevice: '/dev/dri/renderD128' } });
+  try {
+    const port = await prepare(cam, 'nul', 40000);
+    const answers: Array<Error | undefined> = [];
+    assert.doesNotThrow(() => cam.handleStreamRequest(startRequest('nul'), (error) => void answers.push(error)));
+    assert.equal(answers.length, 1);
+    assert.match(String(answers[0]?.message), /null bytes/);
+    assert.equal(await portIsFree(port), true, 'the socket is closed');
+    assert.equal(cam.activeStreams, 0);
+    assert.equal(cam.trackedStreams, 0);
+  } finally {
+    await cam.stop();
+  }
+});
+
+test('a socket error on a running stream ends it, stops the encoder and tells the Home app', async () => {
+  const sockets = new Map<string, Socket>();
+  const cam = camera({ ...FAKE_STREAM, onStreamSocket: (id, socket) => void sockets.set(id, socket) });
+  const forced = spyForceStop(cam);
+  const before = liveChildren();
+  try {
+    await prepare(cam, 'socket-error', 40000);
+    await start(cam, 'socket-error');
+    assert.equal(cam.activeStreams, 1);
+    assert.equal(newChildren(before).length, 1, 'the encoder runs');
+    const socket = sockets.get('socket-error');
+    assert.ok(socket, 'the test seam saw the stream socket');
+    socket.emit('error', new Error('simulated socket failure'));
+    assert.equal(cam.activeStreams, 0);
+    assert.deepEqual(forced, ['socket-error'], 'the Home app is told at once');
+    await waitFor(() => cam.trackedStreams === 0, 5000);
+    assert.equal(cam.trackedStreams, 0);
+    assert.deepEqual(newChildren(before), [], 'the encoder is stopped');
+  } finally {
+    await cam.stop();
+  }
+});
+
+/** Send `packets` from `from` to the camera's port, a few times, then wait out the idle time. */
+async function sendThenWait(from: Socket, port: number, packets: Buffer[]): Promise<void> {
+  for (let i = 0; i < 4; i++) {
+    for (const packet of packets) from.send(packet, port, '127.0.0.1');
+    await delay(100);
+  }
+  await delay(1200); // idle 300 ms, checked every 300 ms
+}
+
+test('RTCP from another address does not arm the idle check; RTCP from the viewer does', async (t) => {
+  const stranger = await boundTo('127.0.0.2');
+  if (!stranger) return t.skip('127.0.0.2 cannot be bound here');
+  const viewer = (await boundTo('127.0.0.1'))!;
+  const cam = camera({ ...FAKE_STREAM, streamIdleMs: 300 });
+  const forced = spyForceStop(cam);
+  try {
+    const port = await prepare(cam, 'stranger', 40000);
+    await start(cam, 'stranger');
+    await sendThenWait(stranger, port, [RTCP_RR]);
+    assert.equal(cam.activeStreams, 1, 'RTCP from 127.0.0.2 is not the viewer at 127.0.0.1');
+    assert.deepEqual(forced, []);
+    await sendThenWait(viewer, port, [RTCP_RR]);
+    assert.equal(cam.activeStreams, 0, 'armed by the viewer, then ended when it went quiet');
+    assert.deepEqual(forced, ['stranger']);
+  } finally {
+    stranger.close();
+    viewer.close();
+    await cam.stop();
+  }
+});
+
+test('packets from the viewer that are not RTCP do not arm the idle check', async () => {
+  const viewer = (await boundTo('127.0.0.1'))!;
+  const cam = camera({ ...FAKE_STREAM, streamIdleMs: 300 });
+  const forced = spyForceStop(cam);
+  const malformed = [
+    RTCP_RR.subarray(0, 4), // too short
+    Buffer.from([0x41, 0xc9, 0x00, 0x01, 0, 0, 0, 1]), // version 1
+    Buffer.from([0x80, 0x60, 0x00, 0x01, 0, 0, 0, 1]), // RTP, payload type 96
+    Buffer.from([0x81, 0xc7, 0x00, 0x01, 0, 0, 0, 1]), // packet type 199
+    Buffer.from([0x81, 0xcf, 0x00, 0x01, 0, 0, 0, 1]), // packet type 207
+    Buffer.from('not a packet at all'),
+  ];
+  try {
+    const port = await prepare(cam, 'malformed', 40000);
+    await start(cam, 'malformed');
+    await sendThenWait(viewer, port, malformed);
+    assert.equal(cam.activeStreams, 1, 'malformed packets are not viewer activity');
+    assert.deepEqual(forced, []);
+    await sendThenWait(viewer, port, [RTCP_RR]);
+    assert.equal(cam.activeStreams, 0, 'a valid RTCP header arms it');
+    assert.deepEqual(forced, ['malformed']);
+  } finally {
+    viewer.close();
     await cam.stop();
   }
 });

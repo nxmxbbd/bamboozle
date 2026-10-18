@@ -111,10 +111,14 @@ export function runForOutput(ffmpeg: string, args: string[], timeoutMs: number, 
   });
 }
 
-/** Stop a long-running ffmpeg: SIGTERM, then SIGKILL if it lingers. */
+/**
+ * Stop a long-running ffmpeg: SIGTERM, then SIGKILL if it lingers. A child
+ * without a pid never started (its 'error' is on the way) and is not
+ * signalled.
+ */
 export function stopProcess(child: ChildProcess, graceMs = 2000): Promise<void> {
   return new Promise((resolve) => {
-    if (child.exitCode !== null || child.signalCode !== null) return resolve();
+    if (child.pid === undefined || child.exitCode !== null || child.signalCode !== null) return resolve();
     const timer = setTimeout(() => child.kill('SIGKILL'), graceMs);
     child.once('exit', () => {
       clearTimeout(timer);
