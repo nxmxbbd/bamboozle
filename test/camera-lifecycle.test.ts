@@ -541,7 +541,7 @@ test('a started stream sends one empty datagram from the advertised port to the 
 // The viewer sends its RTCP to the address HAP-NodeJS advertises; the empty
 // datagram must come from that same address, or a stateful firewall does not
 // take the RTCP for a reply.
-test('a stream with a known local address advertises that address and sends from it', async () => {
+test('a stream with a known local address advertises that address and binds its socket to it', async () => {
   const sockets = new Map<string, Socket>();
   const cam = camera({ onStreamSocket: (id, socket) => void sockets.set(id, socket) });
   try {
