@@ -28,7 +28,7 @@ import {
 import { homeKitName } from '../homekit/names.ts';
 import { runForOutput, snapshotArgs, stopProcess, streamArgs, type FfmpegSettings } from './ffmpeg.ts';
 import { OverlayFiles, overlayContent, overlayFilter, type OverlayFonts, type OverlayInput } from './overlay.ts';
-import { isSamePeer, peerAddress, type PeerAddress } from './peer.ts';
+import { isSamePeer, type PeerAddress, viewerPeer } from './peer.ts';
 
 export interface PrinterCameraOptions {
   name: string;
@@ -85,7 +85,11 @@ interface Stream {
   closed: Promise<void>;
   /** The prepare request's target address, where the video goes. */
   peer: string;
-  /** The same, parsed: the only sender whose RTCP counts (none if it does not parse). */
+  /**
+   * The only sender whose RTCP counts (none if the target is not an
+   * address): the target in canonical form, held to the interface of the
+   * HAP connection when it is link-local (see viewerPeer).
+   */
   peerKey: PeerAddress | null;
   ipv6: boolean;
   targetPort: number;
@@ -273,7 +277,7 @@ export class PrinterCamera implements CameraStreamingDelegate {
       // Listening from the start: close() is only ever called after this.
       closed: new Promise<void>((resolve) => socket.once('close', () => resolve())),
       peer: request.targetAddress,
-      peerKey: peerAddress(request.targetAddress),
+      peerKey: viewerPeer(request.targetAddress, request.sourceAddress),
       ipv6,
       targetPort: request.video.port,
       srtpKey: request.video.srtp_key,
@@ -348,7 +352,7 @@ export class PrinterCamera implements CameraStreamingDelegate {
    * Viewer activity, for the idle check. ASSUMPTION, not yet verified
    * against a real Home app: the viewer sends its RTCP to the port we
    * advertised in the prepare response. Only RTCP-shaped packets from the
-   * prepare request's address count; anything else is ignored.
+   * viewer (Stream.peerKey) count; anything else is ignored.
    */
   #datagram(stream: Stream, packet: Buffer, sender: RemoteInfo): void {
     if (stream.state !== 'running') return;

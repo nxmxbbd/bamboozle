@@ -318,6 +318,7 @@ test('stop() resolves only after a binding stream socket has closed', async () =
   await prepared;
 });
 
+// Preservation: this held before a prepared stream's expiry or socket error told the Home app.
 test('STOP of a prepared stream frees it without telling the Home app, which asked', async () => {
   const cam = camera();
   const forced = spyForceStop(cam);
