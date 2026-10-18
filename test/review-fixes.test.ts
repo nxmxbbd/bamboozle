@@ -154,6 +154,8 @@ test('a large report missing a field the status needs is not complete', () => {
   assert.equal(completeAfter(without('device')), true, 'nozzle_temper alone');
 });
 
+// Preservation checks: these two hold with or without the content check;
+// the defect-specific cases are the ones around them.
 test('each captured pushall reply completes the status', () => {
   for (const name of FIXTURES) assert.equal(completeAfter(fixturePrint(name)), true, name);
 });
@@ -161,6 +163,40 @@ test('each captured pushall reply completes the status', () => {
 test('a small state delta does not complete the status', () => {
   assert.equal(completeAfter({ command: 'push_status', gcode_state: 'RUNNING' }), false);
   assert.equal(completeAfter({ command: 'push_status', gcode_state: 'RUNNING', mc_percent: 4, mc_remaining_time: 80 }), false);
+});
+
+const SCALARS = { command: 'push_status', gcode_state: 'RUNNING', mc_percent: 47, mc_remaining_time: 86, print_error: 0 };
+
+test('a report whose nozzle temperature the status cannot resolve is not complete', () => {
+  const variants: Array<[string, Record<string, unknown>]> = [
+    ['empty extruder list', { ...SCALARS, device: { extruder: { info: [] } } }],
+    ['an entry without temp', { ...SCALARS, device: { extruder: { info: [{ id: 0 }] } } }],
+    ['temp as a string', { ...SCALARS, device: { extruder: { info: [{ id: 0, temp: '220' }] } } }],
+    ['only the inactive extruder', { ...SCALARS, device: { extruder: { state: 0x10, info: [{ id: 0, temp: 220 }] } } }],
+  ];
+  for (const [label, print] of variants) {
+    assert.equal(parseStatus(print as never).nozzle, null, `${label}: the status has no nozzle temperature`);
+    assert.equal(completeAfter(print), false, label);
+  }
+  // Controls: the same scalars with a temperature the status can use.
+  assert.equal(completeAfter({ ...SCALARS, nozzle_temper: 220 }), true, 'flat nozzle_temper');
+  assert.equal(completeAfter({ ...SCALARS, device: { extruder: { state: 0x10, info: [{ id: 1, temp: 220 }] } } }), true, 'active extruder');
+});
+
+test('numbers that overflow to Infinity do not complete the status', () => {
+  const fields = { ...SCALARS, nozzle_temper: 220 };
+  const message = (overflow?: string) =>
+    `{"print":{${Object.entries(fields)
+      .map(([key, value]) => `"${key}":${key === overflow ? '1e400' : JSON.stringify(value)}`)
+      .join(',')}}}`;
+  for (const field of ['mc_percent', 'mc_remaining_time', 'print_error', 'nozzle_temper']) {
+    const acc = new ReportAccumulator();
+    acc.handle(message(field));
+    assert.equal(acc.complete, false, field);
+  }
+  const control = new ReportAccumulator();
+  control.handle(message());
+  assert.equal(control.complete, true, 'the same message without an overflow');
 });
 
 // A stand-in for the MQTT client, driven by hand.

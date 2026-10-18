@@ -3,21 +3,22 @@ import { parseStatus, type PrinterStatus } from './status.ts';
 
 /**
  * A pushall reply carries the whole state; deltas carry what changed. One
- * message counts as full only if it alone has everything the status needs:
- * state, progress, remaining time, error code and a nozzle temperature
- * (the flat nozzle_temper, or the per-extruder list of the H2 series).
- * A field count is no evidence: a large delta can still miss these.
+ * message counts as full only if it alone yields everything the status
+ * needs: state, progress, remaining time, error code and a nozzle
+ * temperature. It is judged by the status parser itself, so the same rules
+ * apply (finite numbers only; on the H2 series the active extruder's entry,
+ * else the flat nozzle_temper). A field count is no evidence: a large delta
+ * can still miss these.
  */
 function isFullReport(print: JsonObject): boolean {
-  const device = print['device'];
-  const extruder = isObject(device) ? device['extruder'] : undefined;
-  const temperature = typeof print['nozzle_temper'] === 'number' || (isObject(extruder) && Array.isArray(extruder['info']));
+  const status = parseStatus(print);
   return (
-    typeof print['gcode_state'] === 'string' &&
-    typeof print['mc_percent'] === 'number' &&
-    typeof print['mc_remaining_time'] === 'number' &&
-    typeof print['print_error'] === 'number' &&
-    temperature
+    status.gcodeState !== null &&
+    status.progress !== null &&
+    status.remainingMinutes !== null &&
+    // The parser reads a missing error code as 0; a full report has one.
+    Number.isFinite(print['print_error']) &&
+    status.nozzle !== null
   );
 }
 
