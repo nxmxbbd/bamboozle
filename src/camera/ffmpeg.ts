@@ -85,10 +85,11 @@ export function streamArgs(source: string, overlay: string, settings: FfmpegSett
   ];
 }
 
-/** Run ffmpeg and collect stdout, failing after `timeoutMs`. */
-export function runForOutput(ffmpeg: string, args: string[], timeoutMs: number): Promise<Buffer> {
+/** Run ffmpeg and collect stdout, failing after `timeoutMs` or when `signal` aborts. */
+export function runForOutput(ffmpeg: string, args: string[], timeoutMs: number, signal?: AbortSignal): Promise<Buffer> {
   return new Promise((resolve, reject) => {
-    const child = spawn(ffmpeg, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    if (signal?.aborted) return reject(new Error('cancelled'));
+    const child = spawn(ffmpeg, args, { stdio: ['ignore', 'pipe', 'pipe'], ...(signal ? { signal, killSignal: 'SIGKILL' as const } : {}) });
     const out: Buffer[] = [];
     let err = '';
     const timer = setTimeout(() => {

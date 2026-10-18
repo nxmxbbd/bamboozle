@@ -114,8 +114,9 @@ export async function serve(config: Config, options: ServeOptions): Promise<() =
 
   return async () => {
     for (const timer of timers) clearInterval(timer);
-    await Promise.all(printers.map(({ source }) => source.stop()));
-    await Promise.all(printers.map(({ camera }) => camera?.stop()));
+    // Stop taking HomeKit requests first, then drain cameras and printers.
     await bridge.stop();
+    await Promise.all(printers.map(({ camera }) => camera?.stop()));
+    await Promise.all(printers.map(({ source }) => source.stop()));
   };
 }
