@@ -53,7 +53,7 @@ test('config errors never echo the access code', () => {
 test('bridge and display defaults', () => {
   const config = parseConfig({ printers: [{ ...base, accessCode: 'a' }] }, '/srv');
   assert.deepEqual(config.bridge, { name: 'bamboozle', port: 51827 });
-  assert.deepEqual(config.display, { progress: ['fan'], countdown: [], temperatures: ['chamber'], layout: 'grouped' });
+  assert.deepEqual(config.display, { progress: ['fan'], countdown: [], temperatures: ['chamber'], layout: 'separate' });
 });
 
 test('bridge and display overrides', () => {

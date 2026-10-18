@@ -191,7 +191,7 @@ function parseBridge(value: unknown): BridgeConfig {
 function parseDisplay(value: unknown): DisplayConfig {
   if (value !== undefined && !isRaw(value)) throw new ConfigError('display must be an object');
   const raw = value ?? {};
-  const layout = raw['layout'] ?? 'grouped';
+  const layout = raw['layout'] ?? 'separate';
   if (layout !== 'grouped' && layout !== 'separate') throw new ConfigError('display.layout must be "grouped" or "separate"');
   return {
     progress: pickList(raw['progress'], PROGRESS_STYLES, ['fan'], 'display.progress'),
