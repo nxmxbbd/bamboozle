@@ -126,34 +126,53 @@ function parsePrinter(item: unknown, index: number, baseDir: string): PrinterCon
   return printer;
 }
 
-const CAMERA_SCHEMES = new Set(['rtsp:', 'rtsps:', 'http:', 'https:']);
+/**
+ * Scheme and authority the way ffmpeg splits them (av_url_split): the
+ * authority runs to the first "/", "?" or "#", and anything before an "@"
+ * in it is sent as credentials.
+ */
+const CAMERA_URL = /^(rtsp|rtsps|http|https):\/\/([^/?#]*)/i;
+const UNSAFE_CHARACTERS = /[\\\u0000-\u001f\u007f]/;
 
 /**
  * Camera sources are an allowlist, and messages never echo the source: a
  * URL with credentials (or one ffmpeg would unwrap, such as async:rtsp://…)
  * would put the printer's access code into ffmpeg's command line.
+ *
+ * The WHATWG URL parser and ffmpeg disagree on some inputs: "rtsp:user:pw@host"
+ * has no username for the former but credentials for the latter, and a
+ * backslash is a path separator for http only in the former. So the
+ * authority is checked as ffmpeg reads it, the URL parser must agree, and
+ * the canonical form it produces is what ffmpeg gets.
  */
 function parseCameraSource(value: unknown, where: string): string {
   const source = requireString(value, where);
   const allowed = `${where} must be an rtsp://, rtsps://, http:// or https:// URL, an absolute file path, or lavfi:<graph>`;
+  if (typeof value === 'string' && UNSAFE_CHARACTERS.test(value)) {
+    throw new ConfigError(`${where} may not contain backslashes or control characters`);
+  }
   if (source.startsWith('lavfi:')) {
     if (/:\/\/|@/.test(source.slice('lavfi:'.length))) throw new ConfigError(`${where}: a lavfi graph may not reference a URL`);
     return source;
   }
   if (/^[a-z][a-z0-9+.-]*:/i.test(source)) {
+    const authority = CAMERA_URL.exec(source)?.[2];
+    if (authority === undefined) throw new ConfigError(allowed);
+    if (authority === '') throw new ConfigError(`${where}: the URL has no host`);
+    if (authority.includes('@')) {
+      throw new ConfigError(
+        `${where}: credentials in the URL would be visible in ffmpeg's command line; serve the stream from a local relay such as go2rtc instead`,
+      );
+    }
     let url: URL;
     try {
       url = new URL(source);
     } catch {
       throw new ConfigError(`${where} is not a valid URL; ${allowed}`);
     }
-    if (!CAMERA_SCHEMES.has(url.protocol)) throw new ConfigError(allowed);
-    if (url.username || url.password) {
-      throw new ConfigError(
-        `${where}: credentials in the URL would be visible in ffmpeg's command line; serve the stream from a local relay such as go2rtc instead`,
-      );
-    }
-    return source;
+    if (url.hostname === '') throw new ConfigError(`${where}: the URL has no host`);
+    if (url.username || url.password) throw new ConfigError(`${where}: credentials in the URL are not allowed`);
+    return url.href;
   }
   if (!source.startsWith('/')) throw new ConfigError(allowed);
   return source;

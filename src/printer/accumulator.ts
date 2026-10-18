@@ -1,8 +1,25 @@
 import { isObject, mergeReport, type JsonObject } from './merge.ts';
 import { parseStatus, type PrinterStatus } from './status.ts';
 
-/** A report with at least this many fields is a full pushall reply, not a delta. */
-export const FULL_REPORT_FIELDS = 30;
+/**
+ * A pushall reply carries the whole state; deltas carry what changed. One
+ * message counts as full only if it alone has everything the status needs:
+ * state, progress, remaining time, error code and a nozzle temperature
+ * (the flat nozzle_temper, or the per-extruder list of the H2 series).
+ * A field count is no evidence: a large delta can still miss these.
+ */
+function isFullReport(print: JsonObject): boolean {
+  const device = print['device'];
+  const extruder = isObject(device) ? device['extruder'] : undefined;
+  const temperature = typeof print['nozzle_temper'] === 'number' || (isObject(extruder) && Array.isArray(extruder['info']));
+  return (
+    typeof print['gcode_state'] === 'string' &&
+    typeof print['mc_percent'] === 'number' &&
+    typeof print['mc_remaining_time'] === 'number' &&
+    typeof print['print_error'] === 'number' &&
+    temperature
+  );
+}
 
 /**
  * Turns raw MQTT report payloads into successive statuses. Only
@@ -36,9 +53,8 @@ export class ReportAccumulator {
     if (!isObject(print) || print['command'] !== 'push_status') return null;
 
     this.#print = mergeReport(this.#print, print);
-    // A pushall reply carries the whole state (~100 fields); deltas carry a
-    // handful. Only a full report makes the accumulated state trustworthy.
-    if (Object.keys(print).length >= FULL_REPORT_FIELDS && typeof print['gcode_state'] === 'string') this.#complete = true;
+    // Only a full report makes the accumulated state trustworthy.
+    if (isFullReport(print)) this.#complete = true;
     return parseStatus(this.#print);
   }
 }

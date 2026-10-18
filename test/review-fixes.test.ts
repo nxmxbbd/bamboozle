@@ -43,6 +43,7 @@ test('camera sources: allowlist, no credentials, no wrappers, no URLs inside lav
     `async:http://bblp:${SECRET}@192.0.2.10/x`,
     `concat:rtsp://bblp:${SECRET}@192.0.2.10/x`,
     `lavfi:movie=rtsp\\\\://bblp\\\\:${SECRET}@192.0.2.10/x`,
+    `lavfi:movie=bblp:${SECRET}@192.0.2.10`,
     'relative/path.mp4',
     'file:/etc/passwd',
   ];
@@ -52,6 +53,55 @@ test('camera sources: allowlist, no credentials, no wrappers, no URLs inside lav
       assert.ok(!error.message.includes(SECRET), `the refusal must not echo the source: ${error.message}`);
       return true;
     }, bad);
+  }
+});
+
+function parseSource(source: string): string | undefined {
+  const printer = { name: 'H2C', host: '192.0.2.10', serial: 'S1', accessCode: 'a' };
+  return parseConfig({ printers: [{ ...printer, camera: { source } }] }, tmpdir()).printers[0]?.cameraSource;
+}
+
+function assertRefused(source: string): void {
+  assert.throws(() => parseSource(source), (error: unknown) => {
+    assert.ok(error instanceof ConfigError, JSON.stringify(source));
+    assert.ok(!error.message.includes(SECRET), `the refusal must not echo the secret: ${error.message}`);
+    assert.ok(!error.message.includes(source), `the refusal must not echo the source: ${error.message}`);
+    return true;
+  }, JSON.stringify(source));
+}
+
+test('camera sources: credentials ffmpeg would find without "//" are refused', () => {
+  // The URL parser sees no username here; ffmpeg's av_url_split sends bblp:<secret>.
+  assertRefused(`rtsp:bblp:${SECRET}@192.0.2.10/live`);
+  assertRefused(`rtsps:bblp:${SECRET}@192.0.2.10:322/live`);
+  assertRefused(`http:/bblp:${SECRET}@192.0.2.10/live`);
+});
+
+test('camera sources: backslashes are refused', () => {
+  // For http the URL parser reads "\" as "/", so the host looks like relay.local.
+  assertRefused(`http://relay.local\\bblp:${SECRET}@192.0.2.10/live`);
+  assertRefused(`https://relay.local\\@192.0.2.10/live`);
+  assertRefused('/var/lib/cam\\x.mp4');
+});
+
+test('camera sources: an empty user part or an empty host is refused', () => {
+  for (const source of ['rtsp://@192.0.2.10/x', 'rtsp://:@192.0.2.10/x', 'rtsp:///x', 'http:///x', 'https://?x', 'rtsp://#x']) assertRefused(source);
+});
+
+test('camera sources: control characters are refused', () => {
+  for (const control of ['\u0000', '\u0001', '\t', '\n', '\r', '\u001b', '\u001f', '\u007f']) {
+    assertRefused(`rtsp://192.0.2.10/li${control}ve`);
+  }
+  assertRefused(`rtsp://192.0.2.10/live\n`);
+  assertRefused(`lavfi:testsrc2\u0000`);
+});
+
+test('camera sources: accepted URLs are passed on in canonical form', () => {
+  assert.equal(parseSource('HTTP://127.0.0.1:1984/x'), 'http://127.0.0.1:1984/x');
+  assert.equal(parseSource('RTSP://127.0.0.1:8554/h2c'), 'rtsp://127.0.0.1:8554/h2c');
+  assert.equal(parseSource('https://relay.local'), 'https://relay.local/');
+  for (const ok of ['rtsp://127.0.0.1:8554/h2c', 'rtsps://relay.local/x', 'rtsp://[::1]:8554/h2c', 'http://127.0.0.1:1984/api/stream.mjpeg?src=h2c', '/var/lib/cam.mp4', 'lavfi:testsrc2=size=1680x1080']) {
+    assert.equal(parseSource(ok), ok);
   }
 });
 
@@ -69,6 +119,48 @@ test('a state-only delta does not make the accumulated status complete', () => {
   assert.equal(acc.complete, false);
   acc.handle(readFileSync(new URL('./fixtures/h2c-printing.json', import.meta.url), 'utf8'));
   assert.equal(acc.complete, true);
+});
+
+const FIXTURES = ['h2c-printing.json', 'h2c-finished.json', 'h2c-failed-devmode-on.json'];
+
+function fixturePrint(name: string): Record<string, unknown> {
+  return (JSON.parse(readFileSync(new URL(`./fixtures/${name}`, import.meta.url), 'utf8')) as { print: Record<string, unknown> }).print;
+}
+
+function completeAfter(print: Record<string, unknown>): boolean {
+  const acc = new ReportAccumulator();
+  acc.handle(JSON.stringify({ print }));
+  return acc.complete;
+}
+
+test('a large report missing a field the status needs is not complete', () => {
+  const full = fixturePrint('h2c-printing.json');
+  const without = (...keys: string[]) => Object.fromEntries(Object.entries(full).filter(([key]) => !keys.includes(key)));
+  const variants: Array<[string, Record<string, unknown>]> = [
+    ['no mc_percent', without('mc_percent')],
+    ['no mc_remaining_time', without('mc_remaining_time')],
+    ['no print_error', without('print_error')],
+    ['no gcode_state', without('gcode_state')],
+    ['no nozzle temperature at all', without('nozzle_temper', 'device')],
+    ['mc_percent as a string', { ...full, mc_percent: '47' }],
+    ['device.extruder.info not a list', { ...without('nozzle_temper'), device: { extruder: { info: {} } } }],
+  ];
+  for (const [label, print] of variants) {
+    assert.ok(Object.keys(print).length >= 30, `${label}: still a large report`);
+    assert.equal(completeAfter(print), false, label);
+  }
+  // Either temperature source is enough.
+  assert.equal(completeAfter(without('nozzle_temper')), true, 'device.extruder.info alone');
+  assert.equal(completeAfter(without('device')), true, 'nozzle_temper alone');
+});
+
+test('each captured pushall reply completes the status', () => {
+  for (const name of FIXTURES) assert.equal(completeAfter(fixturePrint(name)), true, name);
+});
+
+test('a small state delta does not complete the status', () => {
+  assert.equal(completeAfter({ command: 'push_status', gcode_state: 'RUNNING' }), false);
+  assert.equal(completeAfter({ command: 'push_status', gcode_state: 'RUNNING', mc_percent: 4, mc_remaining_time: 80 }), false);
 });
 
 // A stand-in for the MQTT client, driven by hand.
