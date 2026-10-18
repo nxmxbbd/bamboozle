@@ -3,6 +3,12 @@ import type { PrinterStatus } from '../printer/status.ts';
 export const PROGRESS_STYLES = ['humidity', 'window', 'fan', 'lightbulb'] as const;
 export type ProgressStyle = (typeof PROGRESS_STYLES)[number];
 
+// How time left is shown: a light sensor (lux = minutes; sensors only appear
+// in the Home app's status bar, not as tiles) or a valve, which gets a tile
+// and a native countdown in the Home app.
+export const COUNTDOWN_STYLES = ['lux', 'valve', 'sprinkler'] as const;
+export type CountdownStyle = (typeof COUNTDOWN_STYLES)[number];
+
 export const TEMPERATURE_SENSORS = ['chamber', 'nozzle', 'bed'] as const;
 export type TemperatureSensor = (typeof TEMPERATURE_SENSORS)[number];
 

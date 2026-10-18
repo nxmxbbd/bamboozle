@@ -23,6 +23,7 @@ export async function serve(config: Config, options: ServeOptions): Promise<() =
       serial: printer.serial,
       ...(printer.model ? { model: printer.model } : {}),
       progress: config.display.progress,
+      countdown: config.display.countdown,
       temperatures: config.display.temperatures,
       layout: config.display.layout,
     });

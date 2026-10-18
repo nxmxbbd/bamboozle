@@ -1,8 +1,10 @@
 import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import {
+  COUNTDOWN_STYLES,
   PROGRESS_STYLES,
   TEMPERATURE_SENSORS,
+  type CountdownStyle,
   type ProgressStyle,
   type TemperatureSensor,
 } from './homekit/display.ts';
@@ -23,6 +25,7 @@ export interface BridgeConfig {
 
 export interface DisplayConfig {
   progress: ProgressStyle[];
+  countdown: CountdownStyle[];
   temperatures: TemperatureSensor[];
   layout: Layout;
 }
@@ -127,6 +130,7 @@ function parseDisplay(value: unknown): DisplayConfig {
   if (layout !== 'grouped' && layout !== 'separate') throw new ConfigError('display.layout must be "grouped" or "separate"');
   return {
     progress: pickList(raw['progress'], PROGRESS_STYLES, ['humidity'], 'display.progress'),
+    countdown: pickList(raw['countdown'], COUNTDOWN_STYLES, ['lux'], 'display.countdown'),
     temperatures: pickList(raw['temperatures'], TEMPERATURE_SENSORS, ['chamber'], 'display.temperatures'),
     layout,
   };

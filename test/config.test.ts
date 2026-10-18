@@ -53,7 +53,7 @@ test('config errors never echo the access code', () => {
 test('bridge and display defaults', () => {
   const config = parseConfig({ printers: [{ ...base, accessCode: 'a' }] }, '/srv');
   assert.deepEqual(config.bridge, { name: 'bamboozle', port: 51827 });
-  assert.deepEqual(config.display, { progress: ['humidity'], temperatures: ['chamber'], layout: 'grouped' });
+  assert.deepEqual(config.display, { progress: ['humidity'], countdown: ['lux'], temperatures: ['chamber'], layout: 'grouped' });
 });
 
 test('bridge and display overrides', () => {
@@ -61,13 +61,13 @@ test('bridge and display overrides', () => {
     {
       printers: [{ ...base, model: 'H2C', accessCode: 'a' }],
       bridge: { name: 'Printers', port: 51900, bind: ['10.0.0.5'] },
-      display: { progress: ['window', 'fan'], temperatures: [], layout: 'separate' },
+      display: { progress: ['window', 'fan'], countdown: ['valve'], temperatures: [], layout: 'separate' },
     },
     '/srv',
   );
   assert.equal(config.printers[0]?.model, 'H2C');
   assert.deepEqual(config.bridge, { name: 'Printers', port: 51900, bind: ['10.0.0.5'] });
-  assert.deepEqual(config.display, { progress: ['window', 'fan'], temperatures: [], layout: 'separate' });
+  assert.deepEqual(config.display, { progress: ['window', 'fan'], countdown: ['valve'], temperatures: [], layout: 'separate' });
 });
 
 test('rejects bad bridge and display settings', () => {
@@ -79,6 +79,7 @@ test('rejects bad bridge and display settings', () => {
     [{ printers: [printer], display: { progress: ['fan', 'fan'] } }, /listed twice/],
     [{ printers: [printer], display: { temperatures: 'nozzle' } }, /must be an array/],
     [{ printers: [printer], display: { layout: 'stacked' } }, /display\.layout/],
+    [{ printers: [printer], display: { countdown: ['hourglass'] } }, /display\.countdown: unknown value/],
   ];
   for (const [raw, message] of cases) {
     assert.throws(() => parseConfig(raw, tmpdir()), (error: unknown) => error instanceof ConfigError && message.test(error.message));

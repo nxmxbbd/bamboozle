@@ -14,7 +14,7 @@ import {
   STATUS_COMMUNICATION_FAILURE,
 } from '../src/homekit/hap-constants.ts';
 import { remainingToLux, toDisplay, type DisplayValues } from '../src/homekit/display.ts';
-import { PrinterAccessories, SNAP_BACK_MS, type PrinterAccessoryOptions } from '../src/homekit/printer-accessory.ts';
+import { MAX_VALVE_SECONDS, PrinterAccessories, SNAP_BACK_MS, type PrinterAccessoryOptions } from '../src/homekit/printer-accessory.ts';
 import { generatePincode, generateSetupId, generateUsername, loadOrCreateIdentity } from '../src/homekit/bridge.ts';
 import { parseStatus } from '../src/printer/status.ts';
 import { VERSION } from '../src/version.ts';
@@ -232,4 +232,32 @@ test('the identity is created once, private, and reused', () => {
   } finally {
     rmSync(storage, { recursive: true, force: true });
   }
+});
+
+test('valve countdowns: running while printing, time left in seconds beyond the spec hour', async () => {
+  const printer = new PrinterAccessories({ ...ALL, countdown: ['lux', 'valve', 'sprinkler'] });
+  printer.update(printing());
+  const a = printer.accessories;
+  const valve = find(a, Service.Valve, 'remaining-valve');
+  const sprinkler = find(a, Service.Valve, 'remaining-sprinkler');
+  assert.equal(value(valve, Characteristic.ValveType), Characteristic.ValveType.GENERIC_VALVE);
+  assert.equal(value(sprinkler, Characteristic.ValveType), Characteristic.ValveType.IRRIGATION);
+  for (const service of [valve, sprinkler]) {
+    assert.equal(value(service, Characteristic.Active), 1);
+    assert.equal(value(service, Characteristic.InUse), 1);
+    assert.equal(value(service, Characteristic.RemainingDuration), 86 * 60);
+    assert.equal(service.getCharacteristic(Characteristic.RemainingDuration).props.maxValue, MAX_VALVE_SECONDS);
+  }
+  // A 222-minute print exceeds the spec's 3600 s cap and must not be clipped.
+  printer.update({ ...printing(), remainingMinutes: 222 });
+  assert.equal(value(valve, Characteristic.RemainingDuration), 222 * 60);
+  // Turning the "valve" off from the Home app snaps back while printing.
+  const active = valve.getCharacteristic(Characteristic.Active);
+  await active.handleSetRequest(0);
+  await new Promise((resolve) => setTimeout(resolve, SNAP_BACK_MS + 100));
+  assert.equal(active.value, 1);
+  // Idle: closed, nothing left.
+  printer.update(toDisplay(fixture('h2c-finished'), true));
+  assert.equal(value(valve, Characteristic.Active), 0);
+  assert.equal(value(valve, Characteristic.RemainingDuration), 0);
 });
