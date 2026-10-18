@@ -9,11 +9,24 @@ import {
   type TemperatureSensor,
 } from './homekit/display.ts';
 import type { Layout } from './homekit/printer-accessory.ts';
+import type { Encoder } from './camera/ffmpeg.ts';
+import type { OverlayFonts } from './camera/overlay.ts';
 import type { PrinterConnection } from './printer/client.ts';
 
 export interface PrinterConfig extends PrinterConnection {
   /** Shown as the HomeKit model, e.g. "H2C". */
   model?: string;
+  /** Video source for the camera accessory (rtsp://, any ffmpeg URL, or lavfi:<graph>). */
+  cameraSource?: string;
+}
+
+export interface CameraConfig {
+  ffmpeg: string;
+  encoder: Encoder;
+  vaapiDevice: string;
+  /** IANA zone for ETA / finish times on the overlay; the host's when absent. */
+  timeZone?: string;
+  fonts: Partial<OverlayFonts>;
 }
 
 export interface BridgeConfig {
@@ -36,6 +49,7 @@ export interface Config {
   storagePath: string;
   bridge: BridgeConfig;
   display: DisplayConfig;
+  camera: CameraConfig;
 }
 
 export const DEFAULT_PORT = 51827;
@@ -105,7 +119,58 @@ function parsePrinter(item: unknown, index: number, baseDir: string): PrinterCon
     accessCode: readAccessCode(item, where, baseDir),
   };
   if (item['model'] !== undefined) printer.model = requireString(item['model'], `${where}.model`);
+  if (item['camera'] !== undefined) {
+    if (!isRaw(item['camera'])) throw new ConfigError(`${where}.camera must be an object`);
+    printer.cameraSource = parseCameraSource(item['camera']['source'], `${where}.camera.source`);
+  }
   return printer;
+}
+
+function parseCameraSource(value: unknown, where: string): string {
+  const source = requireString(value, where);
+  if (source.startsWith('lavfi:')) return source;
+  let url: URL | null = null;
+  try {
+    url = new URL(source);
+  } catch {
+    url = null; // a plain file path
+  }
+  if (url && (url.username || url.password)) {
+    throw new ConfigError(
+      `${where}: credentials in the URL would be visible in ffmpeg's command line; serve the stream from a local relay such as go2rtc instead`,
+    );
+  }
+  return source;
+}
+
+function parseCamera(value: unknown): CameraConfig {
+  if (value !== undefined && !isRaw(value)) throw new ConfigError('camera must be an object');
+  const raw = value ?? {};
+  const encoder = raw['encoder'] ?? 'libx264';
+  if (encoder !== 'libx264' && encoder !== 'vaapi') throw new ConfigError('camera.encoder must be "libx264" or "vaapi"');
+  const camera: CameraConfig = {
+    ffmpeg: requireString(raw['ffmpeg'] ?? 'ffmpeg', 'camera.ffmpeg'),
+    encoder,
+    vaapiDevice: requireString(raw['vaapiDevice'] ?? '/dev/dri/renderD128', 'camera.vaapiDevice'),
+    fonts: {},
+  };
+  if (raw['timeZone'] !== undefined) {
+    const zone = requireString(raw['timeZone'], 'camera.timeZone');
+    try {
+      new Intl.DateTimeFormat('en-GB', { timeZone: zone });
+    } catch {
+      throw new ConfigError(`camera.timeZone: unknown time zone ${JSON.stringify(zone)}`);
+    }
+    camera.timeZone = zone;
+  }
+  const fonts = raw['fonts'];
+  if (fonts !== undefined) {
+    if (!isRaw(fonts)) throw new ConfigError('camera.fonts must be an object');
+    for (const weight of ['bold', 'medium'] as const) {
+      if (fonts[weight] !== undefined) camera.fonts[weight] = requireString(fonts[weight], `camera.fonts.${weight}`);
+    }
+  }
+  return camera;
 }
 
 function parseBridge(value: unknown): BridgeConfig {
@@ -155,6 +220,7 @@ export function parseConfig(raw: unknown, baseDir: string): Config {
     storagePath: resolve(baseDir, requireString(storage, 'storagePath')),
     bridge: parseBridge(raw['bridge']),
     display: parseDisplay(raw['display']),
+    camera: parseCamera(raw['camera']),
   };
 }
 

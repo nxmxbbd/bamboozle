@@ -12,6 +12,8 @@ import { join } from 'node:path';
 import { Characteristic, Service } from 'hap-nodejs';
 import { HttpClient } from 'hap-controller';
 import { startBridge, type RunningBridge } from '../src/homekit/bridge.ts';
+import { PrinterCamera } from '../src/camera/camera.ts';
+import { resolveFonts } from '../src/camera/fonts.ts';
 import { toDisplay } from '../src/homekit/display.ts';
 import { STATUS_COMMUNICATION_FAILURE } from '../src/homekit/hap-constants.ts';
 import { isValidHomeKitName } from '../src/homekit/names.ts';
@@ -62,6 +64,7 @@ let port = 0;
 let bridge: RunningBridge;
 let client: HttpClient;
 let printer: PrinterAccessories;
+let camera: PrinterCamera;
 let db: HapAccessory[] = [];
 
 before(async () => {
@@ -77,7 +80,19 @@ before(async () => {
     layout: 'grouped',
   });
   printer.update(toDisplay(status, true));
-  bridge = await startBridge({ name: 'bamboozle test', port, bind: ['127.0.0.1'], storagePath: storage }, printer.accessories);
+  camera = new PrinterCamera({
+    name: 'H2C',
+    serial: 'SERIAL1',
+    source: 'lavfi:testsrc2=size=1680x1080:rate=15',
+    overlayDir: join(storage, 'overlay'),
+    fonts: resolveFonts(),
+    ffmpeg: { path: 'ffmpeg', encoder: 'libx264', vaapiDevice: '/dev/dri/renderD128' },
+  });
+  camera.update({ status, available: true, name: 'H2C', now: new Date(), finishedAt: null });
+  bridge = await startBridge({ name: 'bamboozle test', port, bind: ['127.0.0.1'], storagePath: storage }, [
+    ...printer.accessories,
+    camera.accessory,
+  ]);
   client = new HttpClient(bridge.identity.username, '127.0.0.1', port);
   await client.pairSetup(bridge.identity.pincode);
   db = ((await client.getAccessories()) as unknown as { accessories: HapAccessory[] }).accessories;
@@ -85,12 +100,21 @@ before(async () => {
 
 after(async () => {
   await client?.close();
+  await camera?.stop();
   await bridge?.stop();
   rmSync(storage, { recursive: true, force: true });
 });
 
+const CAMERA_STREAM_MANAGEMENT = Service.CameraRTPStreamManagement.UUID;
+
+function cameraAccessory(): HapAccessory {
+  const found = db.find((a) => a.services.some((s) => fullType(s.type) === CAMERA_STREAM_MANAGEMENT));
+  assert.ok(found, 'a camera accessory');
+  return found;
+}
+
 function printerAccessory(): HapAccessory {
-  const found = db.find((a) => a.aid !== 1);
+  const found = db.find((a) => a.aid !== 1 && !a.services.some((s) => fullType(s.type) === CAMERA_STREAM_MANAGEMENT));
   assert.ok(found, 'a bridged printer accessory');
   return found;
 }
@@ -109,7 +133,7 @@ function characteristic(svc: HapService, type: string): HapCharacteristic {
 
 test('pairing succeeds and the bridge reports itself paired', () => {
   assert.equal(bridge.isPaired(), true);
-  assert.equal(db.length, 2, 'the bridge itself plus one grouped printer accessory');
+  assert.equal(db.length, 3, 'the bridge itself, one grouped printer accessory and its camera');
 });
 
 test('every Name and ConfiguredName the controller sees is valid', () => {
@@ -175,4 +199,10 @@ test('while the printer is unreachable the controller gets a communication failu
   printer.update(toDisplay(status, true));
   const ok = (await client.getCharacteristics([id])) as { characteristics: Array<{ value: unknown }> };
   assert.equal(ok.characteristics[0]?.value, 47);
+});
+
+test('the camera serves an overlaid JPEG snapshot over HAP', async () => {
+  const image = await client.getImage(640, 360, cameraAccessory().aid);
+  assert.equal(image.subarray(0, 2).toString('hex'), 'ffd8');
+  assert.ok(image.length > 5000, `a real picture, ${image.length} bytes`);
 });

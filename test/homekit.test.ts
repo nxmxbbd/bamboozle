@@ -12,6 +12,13 @@ import {
   EVENT_PAIRED,
   EVENT_UNPAIRED,
   STATUS_COMMUNICATION_FAILURE,
+  CATEGORY_CAMERA,
+  SRTP_AES_CM_128_HMAC_SHA1_80,
+  H264_PROFILES,
+  H264_LEVELS,
+  STREAM_START,
+  STREAM_RECONFIGURE,
+  STREAM_STOP,
 } from '../src/homekit/hap-constants.ts';
 import { remainingToLux, toDisplay, type DisplayValues } from '../src/homekit/display.ts';
 import { PrinterAccessories, SNAP_BACK_MS, type PrinterAccessoryOptions } from '../src/homekit/printer-accessory.ts';
@@ -30,6 +37,13 @@ test('hap constant literals match the runtime enums', () => {
   assert.equal(ADVERTISER_CIAO, hap.MDNSAdvertiser.CIAO);
   assert.equal(EVENT_PAIRED, hap.AccessoryEventTypes.PAIRED);
   assert.equal(EVENT_UNPAIRED, hap.AccessoryEventTypes.UNPAIRED);
+  assert.equal(CATEGORY_CAMERA, hap.Categories.CAMERA);
+  assert.equal(SRTP_AES_CM_128_HMAC_SHA1_80, hap.SRTPCryptoSuites.AES_CM_128_HMAC_SHA1_80);
+  assert.deepEqual(H264_PROFILES, [hap.H264Profile.BASELINE, hap.H264Profile.MAIN, hap.H264Profile.HIGH]);
+  assert.deepEqual(H264_LEVELS, [hap.H264Level.LEVEL3_1, hap.H264Level.LEVEL3_2, hap.H264Level.LEVEL4_0]);
+  assert.equal(STREAM_START, hap.StreamRequestTypes.START);
+  assert.equal(STREAM_RECONFIGURE, hap.StreamRequestTypes.RECONFIGURE);
+  assert.equal(STREAM_STOP, hap.StreamRequestTypes.STOP);
 });
 
 test('VERSION matches package.json and is numeric x.y.z', () => {

@@ -85,3 +85,39 @@ test('rejects bad bridge and display settings', () => {
     assert.throws(() => parseConfig(raw, tmpdir()), (error: unknown) => error instanceof ConfigError && message.test(error.message));
   }
 });
+
+test('camera: per-printer source and global settings', () => {
+  const config = parseConfig(
+    {
+      printers: [{ ...base, accessCode: 'a', camera: { source: 'rtsp://127.0.0.1:8554/h2c' } }],
+      camera: { encoder: 'vaapi', timeZone: 'Australia/Perth', fonts: { bold: '/f/b.otf' } },
+    },
+    '/srv',
+  );
+  assert.equal(config.printers[0]?.cameraSource, 'rtsp://127.0.0.1:8554/h2c');
+  assert.deepEqual(config.camera, { ffmpeg: 'ffmpeg', encoder: 'vaapi', vaapiDevice: '/dev/dri/renderD128', timeZone: 'Australia/Perth', fonts: { bold: '/f/b.otf' } });
+  const defaults = parseConfig({ printers: [{ ...base, accessCode: 'a' }] }, '/srv');
+  assert.equal(defaults.printers[0]?.cameraSource, undefined);
+  assert.deepEqual(defaults.camera, { ffmpeg: 'ffmpeg', encoder: 'libx264', vaapiDevice: '/dev/dri/renderD128', fonts: {} });
+  assert.equal(parseConfig({ printers: [{ ...base, accessCode: 'a', camera: { source: 'lavfi:testsrc2' } }] }, '/srv').printers[0]?.cameraSource, 'lavfi:testsrc2');
+});
+
+test('camera: credentials in the source URL are refused, other mistakes too', () => {
+  const printer = { ...base, accessCode: 'a' };
+  const cases: Array<[unknown, RegExp]> = [
+    [{ printers: [{ ...printer, camera: { source: 'rtsps://bblp:12345678@192.0.2.10:322/streaming/live/1' } }] }, /credentials in the URL/],
+    [{ printers: [{ ...printer, camera: { source: '' } }] }, /camera\.source/],
+    [{ printers: [{ ...printer, camera: 'rtsp://x' }] }, /camera must be an object/],
+    [{ printers: [printer], camera: { encoder: 'nvenc' } }, /camera\.encoder/],
+    [{ printers: [printer], camera: { timeZone: 'Mars/Olympus' } }, /unknown time zone/],
+  ];
+  for (const [raw, message] of cases) {
+    assert.throws(() => parseConfig(raw, tmpdir()), (error: unknown) => error instanceof ConfigError && message.test(error.message));
+  }
+  // The refusal must not echo the secret back.
+  try {
+    parseConfig({ printers: [{ ...printer, camera: { source: 'rtsps://bblp:12345678@192.0.2.10:322/x' } }] }, tmpdir());
+  } catch (error) {
+    assert.ok(!(error as Error).message.includes('12345678'));
+  }
+});
