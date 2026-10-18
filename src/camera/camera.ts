@@ -81,6 +81,8 @@ interface Stream {
   state: StreamState;
   /** Bound to the port we advertise for the session (see #datagram). */
   socket: Socket;
+  /** Settles on the socket's 'close' (a next-tick event after close()). */
+  closed: Promise<void>;
   /** The prepare request's target address, where the video goes. */
   peer: string;
   /** The same, parsed: the only sender whose RTCP counts (none if it does not parse). */
@@ -268,6 +270,8 @@ export class PrinterCamera implements CameraStreamingDelegate {
     const stream: Stream = {
       state: 'binding',
       socket,
+      // Listening from the start: close() is only ever called after this.
+      closed: new Promise<void>((resolve) => socket.once('close', () => resolve())),
       peer: request.targetAddress,
       peerKey: peerAddress(request.targetAddress),
       ipv6,
@@ -447,8 +451,9 @@ export class PrinterCamera implements CameraStreamingDelegate {
 
   /**
    * End a stream in any state. Idempotent: every caller gets the same
-   * promise, which settles once the socket is closed and ffmpeg has exited;
-   * only then is the record dropped. Unanswered HomeKit callbacks fail.
+   * promise, which settles once the socket has emitted 'close' and ffmpeg
+   * has exited; only then is the record dropped. Unanswered HomeKit
+   * callbacks fail.
    */
   #end(sessionID: string, stream = this.#streams.get(sessionID)): Promise<void> {
     if (!stream) return Promise.resolve();
@@ -463,7 +468,8 @@ export class PrinterCamera implements CameraStreamingDelegate {
     this.#answerPrepare(stream, reason);
     this.#answerStart(stream, reason);
     const { child } = stream;
-    stream.ending = (child ? stopProcess(child) : Promise.resolve()).then(() => {
+    const exited = child ? stopProcess(child) : Promise.resolve();
+    stream.ending = Promise.all([stream.closed, exited]).then(() => {
       if (this.#streams.get(sessionID) === stream) this.#streams.delete(sessionID);
     });
     return stream.ending;

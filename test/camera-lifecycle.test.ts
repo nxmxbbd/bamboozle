@@ -287,6 +287,37 @@ test('a socket error on a prepared stream ends it, frees the port and tells the 
   }
 });
 
+// HAP-NodeJS answers characteristic writes from promise callbacks, so STOP
+// arrives in a microtask, where an answer could run before the socket's
+// 'close' (a next-tick event).
+test('STOP is answered only after the stream socket has closed', async () => {
+  const sockets: Socket[] = [];
+  const cam = camera({ onStreamSocket: (_id, socket) => void sockets.push(socket) });
+  try {
+    await prepare(cam, 'close-order', 40000);
+    let closed = false;
+    sockets[0]!.once('close', () => (closed = true));
+    await Promise.resolve();
+    const closedWhenAnswered = await new Promise<boolean>((resolve) =>
+      cam.handleStreamRequest({ sessionID: 'close-order', type: STREAM_STOP } as never, () => resolve(closed)),
+    );
+    assert.equal(closedWhenAnswered, true);
+  } finally {
+    await cam.stop();
+  }
+});
+
+test('stop() resolves only after a binding stream socket has closed', async () => {
+  const sockets: Socket[] = [];
+  let closed = false;
+  const cam = camera({ onStreamSocket: (_id, socket) => void (sockets.push(socket), socket.once('close', () => (closed = true))) });
+  const prepared = prepare(cam, 'close-binding', 40000).catch(() => {});
+  await Promise.resolve();
+  await cam.stop();
+  assert.equal(closed, true);
+  await prepared;
+});
+
 test('STOP of a prepared stream frees it without telling the Home app, which asked', async () => {
   const cam = camera();
   const forced = spyForceStop(cam);
