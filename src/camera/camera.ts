@@ -95,10 +95,10 @@ interface Stream {
   peerKey: PeerAddress | null;
   /**
    * Where the video and the return-path datagram go: peerKey as a host
-   * string, with our zone when it has one (see socketHost), so neither the
-   * viewer's own zone nor an IPv4-mapped form reaches the socket or ffmpeg.
-   * When the target is not an address (peerKey is null), the target as
-   * given.
+   * string for the stream's socket family (see socketHost), with our zone
+   * when it has one, so the viewer's own zone never reaches the socket or
+   * ffmpeg; an IPv4 viewer on an IPv6 stream is written IPv4-mapped. When
+   * the target is not an address (peerKey is null), the target as given.
    */
   destination: string;
   ipv6: boolean;
@@ -302,7 +302,7 @@ export class PrinterCamera implements CameraStreamingDelegate {
       // Listening from the start: close() is only ever called after this.
       closed: new Promise<void>((resolve) => socket.once('close', () => resolve())),
       peerKey,
-      destination: peerKey === null ? request.targetAddress : socketHost(peerKey),
+      destination: peerKey === null ? request.targetAddress : socketHost(peerKey, ipv6),
       ipv6,
       targetPort: request.video.port,
       srtpKey: request.video.srtp_key,

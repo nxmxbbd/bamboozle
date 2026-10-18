@@ -94,6 +94,14 @@ test('a host string carries the zone after a %, and nothing else', () => {
   assert.equal(socketHost({ address: '192.0.2.33', zone: null }), '192.0.2.33');
 });
 
+// A udp6 socket (and ffmpeg's IPv6 target) cannot take a bare IPv4 address.
+test('for an IPv6 socket an IPv4 peer is written IPv4-mapped', () => {
+  assert.equal(socketHost({ address: '192.0.2.50', zone: null }, true), '::ffff:192.0.2.50');
+  assert.equal(socketHost({ address: '192.0.2.50', zone: null }, false), '192.0.2.50');
+  assert.equal(socketHost({ address: '2001:db8::5', zone: null }, true), '2001:db8::5');
+  assert.equal(socketHost({ address: 'fe80::abcd', zone: 'eth0' }, true), 'fe80::abcd%eth0');
+});
+
 // Preservation checks: these held before as well.
 test('an expected peer without a zone matches a sender on any interface', () => {
   assert.equal(same('fe80::1234', 'fe80::1234%eth1'), true);

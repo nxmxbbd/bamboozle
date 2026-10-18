@@ -69,8 +69,12 @@ export function localMediaAddress(localAddress: string | undefined, ipv6: boolea
 /**
  * `peer` as a host string for a socket (bind, send) or ffmpeg: the address
  * with `%zone` appended when it has a zone, the address alone otherwise.
+ * `ipv6` is whether the socket is IPv6 (default: the address's own family);
+ * an IPv4 peer is then written IPv4-mapped (`::ffff:a.b.c.d`), the only form
+ * an IPv6 socket accepts for it.
  */
-export function socketHost(peer: PeerAddress): string {
+export function socketHost(peer: PeerAddress, ipv6 = isIPv6(peer.address)): string {
+  if (ipv6 && isIPv4(peer.address)) return `::ffff:${peer.address}`;
   return peer.zone === null ? peer.address : `${peer.address}%${peer.zone}`;
 }
 
