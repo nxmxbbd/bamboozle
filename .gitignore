@@ -1,0 +1,12 @@
+node_modules/
+dist/
+
+# Runtime state: HomeKit pairing keys, pinned printer certificates.
+storage/
+
+# Local config holds printer access codes.
+config.json
+*.local.json
+
+# Raw printer reports: run scripts/sanitize-report.ts before committing one.
+*.raw.json
