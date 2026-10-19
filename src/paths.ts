@@ -1,6 +1,6 @@
-import { existsSync, realpathSync, statSync } from 'node:fs';
+import { lstatSync, readlinkSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { dirname, isAbsolute, join, parse, relative, resolve, sep } from 'node:path';
 
 export type Env = Readonly<Record<string, string | undefined>>;
 
@@ -31,54 +31,62 @@ export function resolveConfigPath(flag: string | undefined, env: Env = process.e
 }
 
 /**
- * The first directory at or above `path` that other users could use to
- * swap what lies below it (config, access code, pairing keys), or null.
- * The nearest existing one is where things are still to be created, so any
- * write access for everyone counts there: the sticky bit only protects names
- * that already exist. Further up, a sticky directory such as /tmp is fine.
- * Windows reports every directory as writable, so it is not checked there.
+ * The first directory that other users could use to swap what bamboozle
+ * reaches through `path` (config, access code, pairing keys), or null.
+ * The path is resolved the way the kernel does it, one name at a time,
+ * following every symlink (relative targets and chains included), and each
+ * directory a name is looked up in counts: the one holding a link as much as
+ * the link's target. There, a directory anyone may write to is fine only
+ * with the sticky bit (/tmp), which stops others replacing names that exist.
+ * The deepest existing directory is where things are still to be created,
+ * and the sticky bit does not stop others creating a name first: any write
+ * access for everyone counts there. Windows reports every directory as
+ * writable, so it is not checked there.
  */
 export function openToEveryone(path: string, platform: NodeJS.Platform = process.platform): string | null {
   if (platform === 'win32') return null;
-  const lexical = resolve(path);
-  const found = walkUp(lexical);
-  if (found) return found;
-  // A symlink on the way leads somewhere else: its target and everything
-  // above that count as well. (The directories holding the links are
-  // covered by the walk above.)
-  let existing = lexical;
-  while (!existsSync(existing)) {
-    const up = dirname(existing);
-    if (up === existing) return null;
-    existing = up;
-  }
-  let real: string;
-  try {
-    real = realpathSync(existing);
-  } catch {
-    return null;
-  }
-  return real === existing ? null : walkUp(real);
-}
-
-function walkUp(start: string): string | null {
-  let current = start;
-  let nearest = true;
-  for (;;) {
-    let mode: number | undefined;
+  const lookedIn: string[] = []; // directories a name was looked up in, in order
+  let current = parse(resolve(path)).root;
+  let pending = resolve(path).split(sep).filter(Boolean);
+  let links = 0;
+  while (pending.length > 0) {
+    const name = pending.shift() as string;
+    if (name === '.') continue;
+    if (name === '..') {
+      current = dirname(current);
+      continue;
+    }
+    const next = join(current, name);
+    lookedIn.push(current);
+    let stat;
     try {
-      mode = statSync(current).mode;
+      stat = lstatSync(next);
     } catch {
-      // not there (yet)
+      break; // not there (yet): it gets created in `current`
     }
-    if (mode !== undefined) {
-      if (mode & 0o002 && (nearest || !(mode & 0o1000))) return current;
-      nearest = false;
+    if (stat.isSymbolicLink()) {
+      if (++links > 40) break; // a loop: the actual read fails later, with its own error
+      const target = readlinkSync(next);
+      pending = [...target.split(sep).filter(Boolean), ...pending];
+      if (isAbsolute(target)) current = parse(target).root;
+      continue;
     }
-    const up = dirname(current);
-    if (up === current) return null;
-    current = up;
+    if (!stat.isDirectory()) break; // a file in the way: reported by whatever reads the path
+    current = next;
   }
+  const mode = (dir: string) => {
+    try {
+      return statSync(dir).mode;
+    } catch {
+      return 0;
+    }
+  };
+  if (mode(current) & 0o002) return current;
+  for (const dir of new Set(lookedIn)) {
+    const bits = mode(dir);
+    if (bits & 0o002 && !(bits & 0o1000)) return dir;
+  }
+  return null;
 }
 
 /**

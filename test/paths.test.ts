@@ -76,3 +76,20 @@ test('the advice for an open directory never says to chmod a sticky one such as 
   assert.ok(advice.includes(`mkdir -m 700 ${join(mine, 'bz')}`), advice);
   assert.match(openAdvice(mine, mine), /--config/, 'nothing to create below it: go elsewhere');
 });
+
+test('openToEveryone checks every directory a lookup passes, intermediate links in a chain included', () => {
+  const base = mkdtempSync(join(tmpdir(), 'bamboozle-paths-'));
+  after(() => rmSync(base, { recursive: true, force: true }));
+  for (const dir of ['private', 'shared', 'real/state']) mkdirSync(join(base, dir), { recursive: true, mode: 0o700 });
+  symlinkSync(join(base, 'shared', 'middle'), join(base, 'private', 'state')); // private/state -> shared/middle
+  symlinkSync(join(base, 'real', 'state'), join(base, 'shared', 'middle')); // shared/middle -> real/state
+  symlinkSync('../real/state', join(base, 'private', 'relative')); // a relative target
+  symlinkSync(join(base, 'private', 'loop-b'), join(base, 'private', 'loop-a'));
+  symlinkSync(join(base, 'private', 'loop-a'), join(base, 'private', 'loop-b'));
+  assert.equal(openToEveryone(join(base, 'private', 'state')), null, 'all private so far');
+  assert.equal(openToEveryone(join(base, 'private', 'relative', 'config.json')), null);
+  chmodSync(join(base, 'shared'), 0o777);
+  assert.equal(openToEveryone(join(base, 'private', 'state')), join(base, 'shared'), 'the middle link can be swapped');
+  assert.equal(openToEveryone(join(base, 'private', 'state', 'storage')), join(base, 'shared'));
+  assert.equal(openToEveryone(join(base, 'private', 'loop-a', 'x')), null, 'a loop ends the walk (the read itself fails later)');
+});
