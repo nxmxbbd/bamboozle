@@ -60,13 +60,13 @@ test('bridge and display overrides', () => {
   const config = parseConfig(
     {
       printers: [{ ...base, model: 'H2C', accessCode: 'a' }],
-      bridge: { name: 'Printers', port: 51900, bind: ['10.0.0.5'] },
+      bridge: { name: 'Printers', port: 51900, bind: ['198.51.100.5'] },
       display: { progress: ['window', 'fan'], countdown: ['lux'], temperatures: [], layout: 'separate' },
     },
     '/srv',
   );
   assert.equal(config.printers[0]?.model, 'H2C');
-  assert.deepEqual(config.bridge, { name: 'Printers', port: 51900, bind: ['10.0.0.5'] });
+  assert.deepEqual(config.bridge, { name: 'Printers', port: 51900, bind: ['198.51.100.5'] });
   assert.deepEqual(config.display, { progress: ['window', 'fan'], countdown: ['lux'], temperatures: [], layout: 'separate' });
 });
 

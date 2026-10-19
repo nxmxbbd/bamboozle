@@ -389,7 +389,7 @@ export class PrinterCamera implements CameraStreamingDelegate {
 
   /**
    * Send one empty datagram from the advertised port to the port the viewer
-   * receives the video on, at Stream.destination. The viewer sends its RTCP
+   * receives the video on, at Stream.destination. An iPhone sends its RTCP
    * from that port to the advertised address and port; a stateful host
    * firewall (ufw, firewalld) drops those packets as unsolicited unless
    * this socket has sent to the viewer's address and port first, from the

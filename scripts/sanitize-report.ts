@@ -37,7 +37,7 @@ const REPLACE: Record<string, Json> = {
 // Dotted quads without leading zeros. Firmware versions such as 01.02.00.00
 // have zero-padded groups and are left alone.
 const OCTET = '(?:25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]?\\d)';
-const IPV4 = new RegExp(`(?<![\\d.])${OCTET}(?:\\.${OCTET}){3}(?![\\d.])`, 'g');
+export const IPV4 = new RegExp(`(?<![\\d.])${OCTET}(?:\\.${OCTET}){3}(?![\\d.])`, 'g');
 
 function scrub(value: Json, key: string | null): Json {
   if (key !== null && Object.hasOwn(REPLACE, key)) {

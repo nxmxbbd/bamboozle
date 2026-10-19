@@ -14,7 +14,7 @@ import type { JsonObject } from '../src/printer/merge.ts';
 const LIBX264: FfmpegSettings = { path: 'ffmpeg', encoder: 'libx264', vaapiDevice: '/dev/dri/renderD128' };
 const SPEC: StreamSpec = {
   width: 1280, height: 720, fps: 30, bitrate: 299, profile: 1, payloadType: 99, ssrc: 12345678, mtu: 1378,
-  targetAddress: '10.0.0.2', ipv6: false, targetPort: 52000,
+  targetAddress: '198.51.100.2', ipv6: false, targetPort: 52000,
   srtpKey: Buffer.alloc(16, 1), srtpSalt: Buffer.alloc(14, 2),
 };
 
@@ -43,7 +43,7 @@ test('stream arguments: libx264 over SRTP with the negotiated parameters', () =>
   assert.equal(at('-srtp_out_suite'), 'AES_CM_128_HMAC_SHA1_80');
   assert.equal(at('-srtp_out_params'), Buffer.concat([SPEC.srtpKey, SPEC.srtpSalt]).toString('base64'));
   assert.equal(at('-filter_complex'), '[0:v]OVERLAY,fps=30,scale=1280:720,format=yuv420p[out]');
-  assert.equal(args.at(-1), 'srtp://10.0.0.2:52000?rtcpport=52000&pkt_size=1378');
+  assert.equal(args.at(-1), 'srtp://198.51.100.2:52000?rtcpport=52000&pkt_size=1378');
   assert.ok(args.includes('-an'));
   assert.ok(!args.includes('-vaapi_device'));
 });
