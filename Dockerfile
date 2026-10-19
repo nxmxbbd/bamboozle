@@ -4,7 +4,7 @@
 FROM node:22-trixie-slim AS build
 WORKDIR /src
 COPY package.json package-lock.json ./
-RUN npm ci --ignore-scripts
+RUN npm ci --ignore-scripts --omit=optional
 COPY tsconfig.json tsconfig.build.json ./
 COPY src ./src
 RUN npm run build
