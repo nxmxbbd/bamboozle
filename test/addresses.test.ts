@@ -58,3 +58,22 @@ test('the address check knows a real address from a documentation one', () => {
   assert.equal(allowed('192.0.20.1'), false);
   assert.equal(allowed('198.51.10.1'), false);
 });
+
+test('files that hold the access code or the pairing keys are never published', () => {
+  // Where init, the README and the compose file put them, at any depth.
+  const secrets = [
+    'config.json', 'docker/config.json',
+    'printer.code', 'docker/printer.code', 'h2c.code',
+    'data/config.json', 'docker/data/printer.code',
+    'storage/bridge.json', 'docker/data/storage/bridge.json',
+  ];
+  const published = secrets.filter((path) => {
+    try {
+      execFileSync('git', ['check-ignore', '-q', '--no-index', path], { cwd: fileURLToPath(root) });
+      return false; // exit 0: ignored
+    } catch {
+      return true;
+    }
+  });
+  assert.deepEqual(published, []);
+});

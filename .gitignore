@@ -4,9 +4,10 @@ dist/
 # Runtime state: HomeKit pairing keys, pinned printer certificates.
 storage/
 
-# Local config holds printer access codes.
+# Local config and access-code files (init writes printer.code).
 config.json
 *.local.json
+*.code
 
 # Docker's data folder next to compose.yaml: config, access code, pairing keys.
 data/
