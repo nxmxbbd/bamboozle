@@ -317,3 +317,42 @@ test('init suggests serve with the given --config, else the hint the environment
   assert.equal(serveHint('/tmp/my config.json', { BAMBOOZLE_SERVE_HINT: compose }), "bamboozle serve --config '/tmp/my config.json'");
   assert.equal(serveHint('cfg/a.json', {}), 'bamboozle serve --config cfg/a.json');
 });
+
+test('a control character ends an escape sequence and still counts: Esc then Ctrl+C cancels, Enter ends a half sequence', async () => {
+  const t = fakeTty();
+  const cancelled = promptLine(t.input, t.output, 'Q: ', true);
+  t.type('\u001b\u0003');
+  await assert.rejects(cancelled, /cancelled/);
+  const half = fakeTty();
+  const answer = promptLine(half.input, half.output, 'Q: ', false);
+  half.type('ab\u001b[1\r');
+  assert.equal(await answer, 'ab');
+});
+
+test('a lone Esc (its own keypress) does not eat the next character', async () => {
+  const t = fakeTty();
+  const answer = promptLine(t.input, t.output, 'Code: ', true);
+  t.type('12');
+  t.type('\u001b');
+  t.type('34\r');
+  assert.equal(await answer, '1234');
+});
+
+test('when echoing or setting up the terminal throws, the prompt fails and the terminal is restored', async () => {
+  const t = fakeTty();
+  let fail = false;
+  const output = { write: (text: string) => { if (fail) throw new Error('EPIPE'); return text; } };
+  const echoing = promptLine(t.input, output, 'Name: ', false);
+  fail = true;
+  t.type('x');
+  await assert.rejects(echoing, /EPIPE/);
+  assert.equal(t.state.raw, false, 'raw mode is off again');
+  t.type('more\r'); // the listener is gone: nothing happens
+
+  const s = fakeTty();
+  const resume = s.input.resume;
+  s.input.resume = () => { throw new Error('EIO'); };
+  await assert.rejects(promptLine(s.input, s.output, 'Q: ', true), /EIO/);
+  assert.equal(s.state.raw, false, 'raw mode is off again');
+  s.input.resume = resume;
+});

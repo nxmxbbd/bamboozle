@@ -195,53 +195,68 @@ export interface TtyInput {
 export function promptLine(input: TtyInput, output: { write(text: string): unknown }, question: string, hidden: boolean): Promise<string> {
   return new Promise((resolve, reject) => {
     let value = '';
+    let done = false;
     // Escape sequences: ESC, then CSI ("[" ... final byte 0x40-0x7e), SS3 ("O" + one byte), or one Alt+key byte.
     let escape: 'none' | 'start' | 'csi' | 'ss3' = 'none';
-    output.write(question);
-    input.setEncoding('utf8');
-    input.setRawMode(true);
-    input.resume();
+    // Every way out (Enter, cancel, an exception here or in setup) restores the terminal, once.
     const finish = (error?: Error) => {
+      if (done) return;
+      done = true;
       input.off('data', onData);
-      input.setRawMode(false);
-      input.pause();
-      output.write('\n');
+      try {
+        input.setRawMode(false);
+        input.pause();
+        output.write('\n');
+      } catch {
+        // Restoring is best effort; the outcome below is what matters.
+      }
       if (error) reject(error);
       else resolve(value);
     };
     const onData = (chunk: string) => {
-      for (const ch of chunk) {
-        if (escape === 'start') {
-          escape = ch === '[' ? 'csi' : ch === 'O' ? 'ss3' : 'none';
-          continue;
-        }
-        if (escape === 'csi') {
-          if (ch >= '@' && ch <= '~') escape = 'none';
-          continue;
-        }
-        if (escape === 'ss3') {
-          escape = 'none';
-          continue;
-        }
-        if (ch === '\u001b') {
-          escape = 'start';
-          continue;
-        }
-        if (ch === '\r' || ch === '\n') return finish();
-        if (ch === '\u0003' || (ch === '\u0004' && value === '')) return finish(new Error('cancelled'));
-        if (ch === '\u007f' || ch === '\b') {
-          if (value) {
-            value = [...value].slice(0, -1).join('');
-            if (!hidden) output.write('\b \b');
+      try {
+        for (const ch of chunk) {
+          if (done) return;
+          // Inside a sequence, a control character ends it and still counts as
+          // itself (as terminals do), so Esc then Ctrl+C cancels.
+          if (escape !== 'none' && ch >= ' ' && ch !== '\u007f') {
+            if (escape === 'start') escape = ch === '[' ? 'csi' : ch === 'O' ? 'ss3' : 'none';
+            else if (escape === 'ss3' || (ch >= '@' && ch <= '~')) escape = 'none';
+            continue;
           }
-          continue;
+          escape = 'none';
+          if (ch === '\u001b') {
+            escape = 'start';
+            continue;
+          }
+          if (ch === '\r' || ch === '\n') return finish();
+          if (ch === '\u0003' || (ch === '\u0004' && value === '')) return finish(new Error('cancelled'));
+          if (ch === '\u007f' || ch === '\b') {
+            if (value) {
+              value = [...value].slice(0, -1).join('');
+              if (!hidden) output.write('\b \b');
+            }
+            continue;
+          }
+          if (ch < ' ') continue;
+          value += ch;
+          if (!hidden) output.write(ch);
         }
-        if (ch < ' ') continue;
-        value += ch;
-        if (!hidden) output.write(ch);
+        // A sequence arrives in one piece; an ESC that ends the chunk was the Esc key on its own.
+        if (escape === 'start') escape = 'none';
+      } catch (error) {
+        finish(error as Error);
       }
     };
-    input.on('data', onData);
+    try {
+      output.write(question);
+      input.setEncoding('utf8');
+      input.on('data', onData);
+      input.setRawMode(true);
+      input.resume();
+    } catch (error) {
+      finish(error as Error);
+    }
   });
 }
 
