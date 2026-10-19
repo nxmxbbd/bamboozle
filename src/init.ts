@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { accessSync, chmodSync, constants, existsSync, mkdirSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { ConfigError, parseConfig } from './config.ts';
@@ -50,6 +50,18 @@ function writePrivate(path: string, content: string): void {
   writeFileSync(path, content, { mode: 0o600 });
 }
 
+/**
+ * Throw (with mkdir's or access's error code) unless `dir` could be created
+ * and written, without creating anything: the nearest existing ancestor
+ * must be a directory this process can write.
+ */
+function assertWritable(dir: string): void {
+  let existing = dir;
+  while (!existsSync(existing) && dirname(existing) !== existing) existing = dirname(existing);
+  if (!statSync(existing).isDirectory()) throw Object.assign(new Error(`${existing} is not a directory`), { code: 'ENOTDIR' });
+  accessSync(existing, constants.W_OK);
+}
+
 async function required(io: InitIO, question: string, hidden = false): Promise<string> {
   for (let attempt = 0; attempt < TRIES; attempt++) {
     const answer = (await io.ask(question, hidden)).trim();
@@ -70,6 +82,16 @@ export async function init(options: InitOptions, io: InitIO): Promise<number> {
   if (existsSync(configPath) && !options.force) {
     io.say(`There is already a config at ${configPath}.`);
     io.say('Your Home pairing lives next to it, so init leaves it alone. Edit the file, or run init --force to rewrite it (the pairing in storage/ is kept).');
+    return 1;
+  }
+  // Find out now, not after the questions, whether the files can be written
+  // (a container user facing a root-owned mount, say).
+  try {
+    assertWritable(dir);
+  } catch (error) {
+    const uid = process.getuid?.();
+    const as = uid === undefined ? '' : `, running as uid ${uid}`;
+    io.say(`Cannot write to ${dir} (${(error as NodeJS.ErrnoException).code ?? 'error'}${as}). Make it writable for that user, or put the config elsewhere with --config.`);
     return 1;
   }
 

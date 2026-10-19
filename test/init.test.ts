@@ -70,6 +70,17 @@ test('init writes a config the real loader accepts, with the code in a 0600 file
   assert.ok(said.some((l) => l.includes('Next: run "bamboozle serve"')));
 });
 
+test('init stops before asking anything when it cannot write the config directory', async () => {
+  // A regular file where the directory should be: mkdir fails even for root,
+  // like a root-owned bind mount does for an unprivileged container user.
+  const blocker = join(dir, `blocker-${++n}`);
+  writeFileSync(blocker, '');
+  const { io, said, asked } = fakeIO(['192.0.2.10', '12345678', '', '']);
+  assert.equal(await init(options({ configPath: join(blocker, 'bamboozle', 'config.json') }), io), 1);
+  assert.deepEqual(asked, [], 'nothing was asked');
+  assert.ok(said.some((l) => l.includes(join(blocker, 'bamboozle')) && l.includes('ENOTDIR')), said.join('\n'));
+});
+
 test('init leaves an existing config (and its pairing) alone unless forced', async () => {
   const opts = options();
   const configDir = join(opts.configPath, '..');
