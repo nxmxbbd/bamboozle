@@ -90,7 +90,7 @@ A few details:
 
 - **Whose `data/` is it?** The container runs as uid 1000, the first user on most Linux machines. If `id -u` says something else, run the container as yourself: add `user: "1001:1001"` (your `id -u` and `id -g`) to the bamboozle service. If `data/` is not writable, `init` says so before asking anything. (Tempted by `chmod 777 data`? `init` refuses that one: anybody on the machine could swap your pairing keys.)
 - **Hardware encoding (Intel GPU):** uncomment `devices` and `group_add` in `compose.yaml`, put in the id of the group that owns the GPU (`getent group render | cut -d: -f3`), and set `"camera": { "encoder": "vaapi" }` in `data/config.json`.
-- **Already running go2rtc?** The sidecar wants the same ports (1984 and 8554). Remove the go2rtc service and give `init` the RTSP URL of the one you have.
+- **Already running go2rtc?** The sidecar wants the same RTSP port (8554). Remove the go2rtc service and give `init` the RTSP URL of the one you have.
 
 ### npm
 
@@ -153,7 +153,7 @@ Then point bamboozle at the relay:
 
 A relay is good anyway: every Home app viewer shares the relay's one connection to the printer, so people can open and close the camera all day without the printer noticing. That matters, because whenever a direct RTSPS client disconnects, the printer's stream freezes for everyone else for about 10 seconds. Fewer direct clients, fewer hiccups.
 
-**go2rtc security note:** go2rtc's API endpoints (`/api/streams`, `/api/config`) will happily show the source URL, access code included. Bind the go2rtc API to localhost, or firewall it. The `go2rtc.yaml` in `docker/` does exactly that, keeps the RTSP server on localhost too, and turns off WebRTC, which would otherwise listen on every interface.
+**go2rtc security note:** go2rtc's API endpoints (`/api/streams`, `/api/config`) will happily show the source URL, access code included. Bind the go2rtc API to localhost (or turn it off), or firewall it. Also mind what happens when its config file is missing or has a typo: go2rtc shrugs and starts its API, RTSP and WebRTC on every interface. The `compose.yaml` in `docker/` therefore sets go2rtc's ports on its command line, where `go2rtc.yaml` cannot undo them: RTSP on localhost, everything else off.
 
 ## Configure and pair
 

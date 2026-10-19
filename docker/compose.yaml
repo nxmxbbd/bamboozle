@@ -28,5 +28,19 @@ services:
     image: alexxit/go2rtc:1.9.14
     network_mode: host
     restart: unless-stopped
+    # Listeners are set here rather than in go2rtc.yaml: when that file is
+    # missing or not valid YAML, go2rtc falls back to its defaults (API,
+    # RTSP and WebRTC on every interface). bamboozle needs only RTSP, here.
+    command:
+      - go2rtc
+      - -config
+      - /config/go2rtc.yaml
+      - -config
+      - '{"api":{"listen":""},"rtsp":{"listen":"127.0.0.1:8554"},"webrtc":{"listen":""},"srtp":{"listen":""}}'
     volumes:
-      - ./go2rtc.yaml:/config/go2rtc.yaml:ro
+      - type: bind
+        source: ./go2rtc.yaml
+        target: /config/go2rtc.yaml
+        read_only: true
+        bind:
+          create_host_path: false # a missing file is an error, not a directory
