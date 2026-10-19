@@ -232,11 +232,29 @@ test('init --force keeps only a valid old model and port, says so up front, and 
   let printer = loadConfig(opts.configPath).printers[0];
   assert.deepEqual([printer?.model, printer?.port], ['H2C', 8883], 'the padded serial still matched, so the model was kept');
 
-  writeFileSync(opts.configPath, JSON.stringify({ printers: [{ name: 'P', host: '192.0.2.99', serial: ' 01P00A000000000 ', accessCode: 'oldcode1', model: 'H2C', port: 8884 }] }));
+  writeFileSync(opts.configPath, JSON.stringify({ printers: [{ name: 'P', host: '192.0.2.10', serial: ' 01P00A000000000 ', accessCode: 'oldcode1', model: 'H2C', port: 8884 }] }));
   const good = fakeIO(['192.0.2.10', '12345678', '', '']);
   assert.equal(await init({ ...opts, force: true }, good.io), 0);
   printer = loadConfig(opts.configPath).printers[0];
   assert.deepEqual([printer?.model, printer?.port], ['H2C', 8884]);
+});
+
+test('init --force keeps the old port only when the address stays the same', async () => {
+  const opts = options();
+  mkdirSync(join(opts.configPath, '..'), { recursive: true });
+  writeFileSync(opts.configPath, JSON.stringify({ printers: [{ name: 'P', host: ' 192.0.2.10 ', port: 8884, serial: '01P00A000000000', accessCode: 'oldcode1' }] }));
+  const { io } = fakeIO(['192.0.2.10', '12345678', '', '']);
+  assert.equal(await init({ ...opts, force: true }, io), 0);
+  assert.equal(loadConfig(opts.configPath).printers[0]?.port, 8884);
+});
+
+test('"none" means no camera however the camera is given', async () => {
+  const flag = options();
+  assert.equal(await init({ ...flag, camera: 'none' }, fakeIO(['192.0.2.10', '12345678', '']).io), 0);
+  assert.equal(loadConfig(flag.configPath).printers[0]?.cameraSource, undefined);
+  const typed = options();
+  assert.equal(await init(typed, fakeIO(['192.0.2.10', '12345678', '', 'NONE']).io), 0);
+  assert.equal(loadConfig(typed.configPath).printers[0]?.cameraSource, undefined);
 });
 
 test('init --force offers the old name and camera URL, and keeps model and port for the same printer', async () => {
@@ -247,7 +265,8 @@ test('init --force offers the old name and camera URL, and keeps model and port 
   const keep = fakeIO(['192.0.2.10', '12345678', '', '']); // Enter through name and camera
   assert.equal(await init({ ...opts, force: true }, keep.io), 0);
   const kept = loadConfig(opts.configPath).printers[0];
-  assert.deepEqual([kept?.name, kept?.cameraSource, kept?.model, kept?.port, kept?.host], ['Workshop', 'rtsp://127.0.0.1:8554/printer', 'H2C', 8884, '192.0.2.10']);
+  assert.deepEqual([kept?.name, kept?.cameraSource, kept?.model, kept?.port, kept?.host], ['Workshop', 'rtsp://127.0.0.1:8554/printer', 'H2C', 8883, '192.0.2.10'],
+    'a new address: the old port (a path to the printer, not the printer) is dropped, the model stays');
   assert.ok(keep.asked.some((q) => q.includes('[Workshop]')) && keep.asked.some((q) => q.includes('[rtsp://127.0.0.1:8554/printer]')), keep.asked.join('\n'));
 
   const none = fakeIO(['192.0.2.10', '12345678', 'Garage', 'none']);

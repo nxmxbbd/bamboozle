@@ -2,7 +2,7 @@ import { accessSync, chmodSync, constants, existsSync, lstatSync, mkdirSync, rea
 import { dirname, join, resolve } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { ConfigError, parseConfig, parseJson } from './config.ts';
-import { openToEveryone } from './paths.ts';
+import { openAdvice, openToEveryone } from './paths.ts';
 import { isPrinterSerial } from './printer/serial.ts';
 
 export interface InitOptions {
@@ -77,6 +77,7 @@ function assertWritable(dir: string): void {
 /** The printer init --force replaces, as far as its values check out. */
 interface PreviousPrinter {
   name?: string;
+  host?: string;
   /** Upper case, trimmed: as the config parser reads it. */
   serial?: string;
   /** Only a source the parser accepts, so never one with credentials in it. */
@@ -108,6 +109,7 @@ function previousPrinter(raw: Record<string, unknown>, dir: string, io: InitIO):
   };
   const previous: PreviousPrinter = {};
   if (typeof raw['name'] === 'string' && raw['name'].trim() !== '') previous.name = raw['name'].trim();
+  if (typeof raw['host'] === 'string') previous.host = raw['host'].trim();
   if (typeof raw['serial'] === 'string') previous.serial = raw['serial'].trim().toUpperCase();
   if (raw['camera'] !== undefined) {
     const source = accepted({ camera: raw['camera'] })?.cameraSource;
@@ -218,7 +220,7 @@ export async function init(options: InitOptions, io: InitIO): Promise<number> {
   for (const place of [dir, resolve(dir, keptStorage)]) {
     const open = openToEveryone(place);
     if (open) {
-      io.say(`${open} is writable by every user on this machine, so anyone could swap the config, the access code or the pairing keys. Run chmod 700 on it (or at least chmod o-w), then init again.`);
+      io.say(`${open} is writable by every user on this machine, so anyone could swap the config, the access code or the pairing keys. ${openAdvice(open, place)}`);
       return 1;
     }
   }
@@ -238,18 +240,21 @@ export async function init(options: InitOptions, io: InitIO): Promise<number> {
   const oldSource = previous?.cameraSource;
   const defaultName = oldName ?? DEFAULT_NAME;
   const name = options.name?.trim() || (await io.ask(`Name in the Home app [${defaultName}]: `)).trim() || defaultName;
+  // "none" means no camera, however it is given.
+  const cameraAnswer = (answer: string) => (answer.trim().toLowerCase() === 'none' ? '' : answer.trim());
   let camera: string;
-  if (options.camera !== undefined) camera = options.camera.trim();
+  if (options.camera !== undefined) camera = cameraAnswer(options.camera);
   else if (oldSource !== undefined) {
     const answer = (await io.ask(`Camera relay URL [${oldSource}] ("none" for no camera): `)).trim();
-    camera = answer === '' ? oldSource : answer.toLowerCase() === 'none' ? '' : answer;
-  } else camera = (await io.ask('Camera relay URL, e.g. rtsp://127.0.0.1:8554/printer (empty for none): ')).trim();
+    camera = answer === '' ? oldSource : cameraAnswer(answer);
+  } else camera = cameraAnswer(await io.ask('Camera relay URL, e.g. rtsp://127.0.0.1:8554/printer (empty for none): '));
 
   const printer: Record<string, unknown> = { name, host, serial };
-  // The same printer keeps what init does not ask about.
+  // The same printer keeps its model; the port is part of the way to it, so
+  // it stays only when the address does.
   if (previous?.serial === serial) {
     if (previous.model !== undefined) printer['model'] = previous.model;
-    if (previous.port !== undefined) printer['port'] = previous.port;
+    if (previous.port !== undefined && previous.host === host) printer['port'] = previous.port;
   }
   if (camera) printer['camera'] = { source: camera };
   // Check with the real parser before writing anything; an inline code stands in for the file.
@@ -288,15 +293,15 @@ export interface TtyInput {
   off(event: 'data', listener: (chunk: string) => void): unknown;
 }
 
+/** How long an ESC may wait for the rest of its sequence before it counts as the Esc key. */
+const LONE_ESC_MS = 100;
+
 /**
  * Read one line from a terminal in raw mode, echoing it ourselves, or not at
  * all for a hidden answer (readline offers no supported way to stop its
  * echo). Backspace edits; escape sequences (arrow keys) are ignored; Ctrl+C,
  * or Ctrl+D on an empty line, cancels.
  */
-/** How long an ESC may wait for the rest of its sequence before it counts as the Esc key. */
-const LONE_ESC_MS = 100;
-
 export function promptLine(input: TtyInput, output: { write(text: string): unknown }, question: string, hidden: boolean): Promise<string> {
   return new Promise((resolve, reject) => {
     let value = '';

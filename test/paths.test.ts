@@ -4,7 +4,7 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after } from 'node:test';
-import { defaultConfigPath, openToEveryone, resolveConfigPath } from '../src/paths.ts';
+import { defaultConfigPath, openAdvice, openToEveryone, resolveConfigPath } from '../src/paths.ts';
 
 const home = () => '/home/someone';
 
@@ -61,4 +61,18 @@ test('openToEveryone follows a symlink: what lies above its target counts too', 
   assert.equal(openToEveryone(join(base, 'private', 'state')), shared, 'the link target sits in an open directory');
   assert.equal(openToEveryone(join(base, 'private', 'state', 'to-create')), shared, 'and so does anything still to be created below it');
   assert.equal(openToEveryone(join(base, 'private', 'fine')), null, 'a link to a private place is fine');
+});
+
+test('the advice for an open directory never says to chmod a sticky one such as /tmp', () => {
+  const base = mkdtempSync(join(tmpdir(), 'bamboozle-paths-'));
+  after(() => rmSync(base, { recursive: true, force: true }));
+  const mine = join(base, 'mine');
+  mkdirSync(mine);
+  chmodSync(mine, 0o777);
+  assert.match(openAdvice(mine, mine), /chmod 700/, 'my own open directory: close it');
+  chmodSync(mine, 0o1777);
+  const advice = openAdvice(mine, join(mine, 'bz', 'storage'));
+  assert.doesNotMatch(advice, /chmod/, 'sticky (think /tmp): never chmod it');
+  assert.ok(advice.includes(`mkdir -m 700 ${join(mine, 'bz')}`), advice);
+  assert.match(openAdvice(mine, mine), /--config/, 'nothing to create below it: go elsewhere');
 });

@@ -4,7 +4,7 @@ import { dirname, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { loadConfig } from './config.ts';
 import { init, serveHint, terminalIO } from './init.ts';
-import { openToEveryone, resolveConfigPath } from './paths.ts';
+import { openAdvice, openToEveryone, resolveConfigPath } from './paths.ts';
 import { readPrinterSerial } from './printer/serial.ts';
 import { probePrinters } from './probe.ts';
 import { serve } from './serve.ts';
@@ -42,9 +42,12 @@ async function runServe(configPath: string, simulate: boolean): Promise<number> 
   console.log(`config ${configPath}`);
   const config = loadConfig(configPath);
   // Not a refusal (it may have run like this for years), but loud.
-  const open = new Set([dirname(resolve(configPath)), config.storagePath].map((dir) => openToEveryone(dir)).filter((dir) => dir !== null));
-  for (const dir of open) {
-    console.warn(`warning: ${dir} is writable by every user on this machine, so anyone could swap the config or the pairing keys (chmod o-w it)`);
+  const warned = new Set<string>();
+  for (const place of [dirname(resolve(configPath)), config.storagePath]) {
+    const open = openToEveryone(place);
+    if (open === null || warned.has(open)) continue;
+    warned.add(open);
+    console.warn(`warning: ${open} is writable by every user on this machine, so anyone could swap the config or the pairing keys. ${openAdvice(open, place)}`);
   }
   const stop = await serve(config, { simulate, tty: process.stdout.isTTY === true });
   await new Promise<void>((resolve) => {

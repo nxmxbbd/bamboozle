@@ -1,6 +1,6 @@
 import { existsSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, isAbsolute, join, resolve } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 export type Env = Readonly<Record<string, string | undefined>>;
 
@@ -79,4 +79,28 @@ function walkUp(start: string): string | null {
     if (up === current) return null;
     current = up;
   }
+}
+
+/**
+ * What to do about `open` (from openToEveryone) for `place`. chmod only for a
+ * directory of one's own that is not sticky: run as root, "chmod 700 /tmp"
+ * would succeed and break every other program. Below a sticky directory, a
+ * private directory made first is safe (others cannot rename it away).
+ */
+export function openAdvice(open: string, place: string): string {
+  let mode = 0;
+  let owner: number | undefined;
+  try {
+    const stat = statSync(open);
+    mode = stat.mode;
+    owner = stat.uid;
+  } catch {
+    // gone meanwhile: fall through to the generic advice
+  }
+  if (owner !== undefined && owner === process.getuid?.() && !(mode & 0o1000)) return 'Run chmod 700 on it (or at least chmod o-w).';
+  const below = relative(open, resolve(place)).split(sep)[0];
+  if (mode & 0o1000 && below && below !== '..') {
+    return `Create ${join(open, below)} yourself first (mkdir -m 700 ${join(open, below)}), or put the config somewhere private with --config.`;
+  }
+  return 'Put the config somewhere private with --config.';
 }
