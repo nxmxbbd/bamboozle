@@ -32,6 +32,7 @@ const REPLACE: Record<string, Json> = {
   ip: 0,
   mask: 0,
   gateway: 0,
+  idx2: 0, // upgrade_state.idx2: meaning unknown, differs between reports, unused
 };
 
 // Dotted quads without leading zeros. Firmware versions such as 01.02.00.00

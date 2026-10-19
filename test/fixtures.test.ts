@@ -20,7 +20,7 @@ test('sanitize removes identifiers and keeps value types', () => {
       task_id: '3570',
       ipcam: { rtsp_url: 'rtsps://10.1.2.3:322/streaming/live/1' },
       net: { info: [{ ip: 1001523722, mask: 16777215 }] },
-      upgrade_state: { sn: '01P00A000000000', lower_limit: '01.02.00.00' },
+      upgrade_state: { sn: '01P00A000000000', lower_limit: '01.02.00.00', idx2: 123456789 },
       nozzle: { info: [{ id: 0, sn: '20D00A000000000' }] },
       tray: { tag_uid: '1234567890ABCDEF', tray_uuid: 'ABCDEF' },
       mc_percent: 47,
@@ -30,6 +30,7 @@ test('sanitize removes identifiers and keeps value types', () => {
   assert.deepEqual(findLeaks(text), []);
   assert.ok(!text.includes('my_secret_part'));
   assert.ok(!text.includes('3570'));
+  assert.ok(text.includes('"idx2":0'), 'idx2 is zeroed and stays a number');
   assert.ok(text.includes('"lower_limit":"01.02.00.00"'), 'firmware versions are not addresses');
   assert.ok(text.includes('rtsps://192.0.2.10:322/streaming/live/1'));
   assert.ok(text.includes('"ip":0'));
