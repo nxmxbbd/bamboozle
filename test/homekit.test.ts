@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { lstatSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as hap from '@homebridge/hap-nodejs';
@@ -235,6 +235,20 @@ test('generated identities follow the HomeKit rules', () => {
     const first = parseInt(username.slice(0, 2), 16);
     assert.equal(first & 0x03, 0x02, 'unicast and locally administered');
     assert.match(generateSetupId(), /^[0-9A-Z]{4}$/);
+  }
+});
+
+test('a bridge.json that is a link to nothing stops the bridge instead of minting a new identity', () => {
+  // The link's target may live on a volume that is not mounted: a new identity
+  // there would be a new bridge to the Home app.
+  const storage = mkdtempSync(join(tmpdir(), 'bamboozle-bridge-'));
+  try {
+    symlinkSync(join(storage, 'elsewhere', 'bridge.json'), join(storage, 'bridge.json'));
+    assert.throws(() => loadOrCreateIdentity(storage), /bridge\.json is a link to nothing/);
+    assert.ok(lstatSync(join(storage, 'bridge.json')).isSymbolicLink());
+    assert.deepEqual(readdirSync(storage), ['bridge.json']);
+  } finally {
+    rmSync(storage, { recursive: true, force: true });
   }
 });
 

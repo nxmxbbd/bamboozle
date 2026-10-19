@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
-import { readdirSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { basename, dirname, join, resolve } from 'node:path';
+import { lstatSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { basename, dirname, join } from 'node:path';
 import { AccessoryInfo } from '@homebridge/hap-nodejs';
 
 // HAP-NodeJS keeps the pairing state in storage/hap, one JSON file per key and
@@ -20,25 +20,23 @@ function code(error: unknown): string | undefined {
   return (error as NodeJS.ErrnoException).code;
 }
 
-/** Where a write to `file` lands: the file a link points to (even one not created yet), else the file. */
+/** Where a write to `file` lands: the file a link (or chain of links) points to, else the file itself. */
 function destination(file: string): string {
   try {
     return realpathSync(file);
   } catch (error) {
     if (code(error) !== 'ENOENT') throw error;
   }
-  try {
-    return resolve(dirname(file), readlinkSync(file)); // a link to a file that does not exist yet
-  } catch (error) {
-    if (code(error) === 'ENOENT' || code(error) === 'EINVAL') return file; // missing, or not a link
-    throw error;
-  }
+  // A link to nothing may point at storage that is not there right now (an
+  // unmounted volume): writing a new file in its place would hide that.
+  if (lstatSync(file, { throwIfNoEntry: false })?.isSymbolicLink()) throw new Error(`${file} is a link to nothing; not replacing it`);
+  return file;
 }
 
 /**
  * Write a file so that it is either the old or the new content, never a half
- * of either. A symbolic link is written through: its target is replaced (or
- * created) and the link stays.
+ * of either. A symbolic link is written through: its target is replaced and
+ * the link stays. A link to nothing is refused.
  */
 export function writeAtomically(file: string, text: string): void {
   const target = destination(file);

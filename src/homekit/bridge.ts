@@ -1,5 +1,5 @@
 import { randomBytes, randomInt } from 'node:crypto';
-import { chmodSync, mkdirSync, readFileSync } from 'node:fs';
+import { chmodSync, lstatSync, mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Accessory, Bridge, Characteristic, HAPStorage, Service, uuid } from '@homebridge/hap-nodejs';
 import { VERSION } from '../version.ts';
@@ -68,6 +68,11 @@ export function loadOrCreateIdentity(storagePath: string): BridgeIdentity {
     return parsed;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  }
+  // Missing because it points somewhere that is not there (an unmounted volume)?
+  // A new identity would be a new bridge to the Home app: stop instead.
+  if (lstatSync(file, { throwIfNoEntry: false })?.isSymbolicLink()) {
+    throw new Error(`${file} is a link to nothing. Restore what it points to; or, to start over as a new bridge, remove the link (and the old bridge from the Home app).`);
   }
   const identity: BridgeIdentity = { username: generateUsername(), pincode: generatePincode(), setupID: generateSetupId() };
   mkdirSync(storagePath, { recursive: true, mode: 0o700 });

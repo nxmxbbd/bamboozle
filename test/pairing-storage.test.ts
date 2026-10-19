@@ -164,13 +164,25 @@ test('writeAtomically: each write has its own temporary file, created exclusivel
   assert.deepEqual(readdirSync(folder), ['file.json']);
 });
 
-test('writeAtomically: a link to a file that does not exist yet creates the file and keeps the link', () => {
+test('writeAtomically: a link to nothing is not replaced', () => {
   const folder = join(dir, 'atomic-dangling');
   mkdirSync(folder);
   symlinkSync('real.json', join(folder, 'link.json'));
-  writeAtomically(join(folder, 'link.json'), 'created');
+  assert.throws(() => writeAtomically(join(folder, 'link.json'), 'new'), /link to nothing/);
   assert.ok(lstatSync(join(folder, 'link.json')).isSymbolicLink());
-  assert.equal(readFileSync(join(folder, 'real.json'), 'utf8'), 'created');
+  assert.deepEqual(readdirSync(folder), ['link.json']);
+});
+
+test('writeAtomically: a chain of links is written through to the file, and the links stay', () => {
+  const folder = join(dir, 'atomic-chain');
+  mkdirSync(join(folder, 'real'), { recursive: true });
+  writeFileSync(join(folder, 'real', 'file.json'), 'old');
+  symlinkSync('real/file.json', join(folder, 'alias.json'));
+  symlinkSync('alias.json', join(folder, 'link.json'));
+  writeAtomically(join(folder, 'link.json'), 'new');
+  assert.ok(lstatSync(join(folder, 'link.json')).isSymbolicLink());
+  assert.ok(lstatSync(join(folder, 'alias.json')).isSymbolicLink());
+  assert.equal(readFileSync(join(folder, 'real', 'file.json'), 'utf8'), 'new');
 });
 
 test('writeAtomically: a temporary name that is taken is left to its owner', () => {
