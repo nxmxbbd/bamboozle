@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_call: # image.yml runs all of this before it publishes
 
 permissions:
   contents: read
@@ -30,9 +31,19 @@ jobs:
       - name: npm test (nothing may be skipped)
         run: |
           set -o pipefail
-          npm test 2>&1 | tee test.log
-          grep -Eq '^(# |ℹ )skipped 0$' test.log
+          npm test 2>&1 | tee "$RUNNER_TEMP/test.log"
+          grep -Eq '^(# |ℹ )skipped 0$' "$RUNNER_TEMP/test.log"
       - run: npm run build
+      - name: The npm package holds dist, README, LICENSE and package.json only
+        if: matrix.node == '22'
+        run: |
+          npm pack --dry-run --json --ignore-scripts > "$RUNNER_TEMP/pack.json"
+          node -e '
+            const files = require(process.argv[1])[0].files.map((f) => f.path);
+            const odd = files.filter((p) => !/^(dist\/.+\.js|README\.md|LICENSE|package\.json)$/.test(p));
+            if (odd.length > 0 || !files.includes("dist/cli.js")) { console.error("unexpected package contents:", odd); process.exit(1); }
+            console.log(files.length + " files");
+          ' "$RUNNER_TEMP/pack.json"
 
   docker:
     runs-on: ubuntu-24.04
