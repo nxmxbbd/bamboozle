@@ -192,7 +192,7 @@ test('the pairing output has the code, a QR code and the URI, for terminals and 
 // --- the terminal prompt -------------------------------------------------------------
 
 import { EventEmitter } from 'node:events';
-import { promptLine } from '../src/init.ts';
+import { promptLine, serveHint } from '../src/init.ts';
 
 function fakeTty() {
   const events = new EventEmitter();
@@ -247,4 +247,14 @@ test('Ctrl+C cancels, and so does Ctrl+D on an empty line (not on a non-empty on
   const answer = promptLine(kept.input, kept.output, 'Q: ', false);
   kept.type('x\u0004y\r');
   assert.equal(await answer, 'xy');
+});
+
+test('init suggests serve with the given --config, else the hint the environment sets, else plain serve', () => {
+  assert.equal(serveHint(undefined, {}), 'bamboozle serve');
+  assert.equal(serveHint(undefined, { BAMBOOZLE_SERVE_HINT: '  ' }), 'bamboozle serve');
+  // The container image sets the hint to the compose commands.
+  const compose = 'docker compose up -d && docker compose logs -f bamboozle';
+  assert.equal(serveHint(undefined, { BAMBOOZLE_SERVE_HINT: compose }), compose);
+  assert.equal(serveHint('/tmp/my config.json', { BAMBOOZLE_SERVE_HINT: compose }), "bamboozle serve --config '/tmp/my config.json'");
+  assert.equal(serveHint('cfg/a.json', {}), 'bamboozle serve --config cfg/a.json');
 });

@@ -2,7 +2,7 @@
 import { existsSync } from 'node:fs';
 import { parseArgs } from 'node:util';
 import { loadConfig } from './config.ts';
-import { init, terminalIO } from './init.ts';
+import { init, serveHint, terminalIO } from './init.ts';
 import { resolveConfigPath } from './paths.ts';
 import { readPrinterSerial } from './printer/serial.ts';
 import { probePrinters } from './probe.ts';
@@ -24,11 +24,6 @@ const USAGE = `usage:
 
 The config is --config, else $BAMBOOZLE_CONFIG, else
 $XDG_CONFIG_HOME/bamboozle/config.json (~/.config/bamboozle/config.json).`;
-
-/** A path as a shell word, for hints people copy. */
-function shellWord(path: string): string {
-  return /^[\w@%+=:,./-]+$/.test(path) ? path : `'${path.replaceAll("'", `'\\''`)}'`;
-}
 
 function requireConfig(path: string): boolean {
   if (existsSync(path)) return true;
@@ -72,7 +67,7 @@ async function runInit(configPath: string, values: { config?: string; host?: str
         ...(values.name !== undefined ? { name: values.name } : {}),
         ...(values.camera !== undefined ? { camera: values.camera } : {}),
         force: values.force,
-        serveCommand: values.config !== undefined ? `bamboozle serve --config ${shellWord(configPath)}` : 'bamboozle serve',
+        serveCommand: serveHint(values.config),
       },
       io,
     );

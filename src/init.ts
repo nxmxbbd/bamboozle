@@ -29,6 +29,21 @@ export const ACCESS_CODE_FILE = 'printer.code';
 const DEFAULT_NAME = '3D Printer';
 const TRIES = 3;
 
+/** A path as a shell word, for hints people copy. */
+function shellWord(path: string): string {
+  return /^[\w@%+=:,./-]+$/.test(path) ? path : `'${path.replaceAll("'", `'\\''`)}'`;
+}
+
+/**
+ * How to start the bridge, for the closing hint: with the --config init was
+ * given, else what $BAMBOOZLE_SERVE_HINT says (the container image points at
+ * its compose commands), else plain "bamboozle serve".
+ */
+export function serveHint(configFlag: string | undefined, env: Readonly<Record<string, string | undefined>> = process.env): string {
+  if (configFlag !== undefined) return `bamboozle serve --config ${shellWord(configFlag)}`;
+  return env['BAMBOOZLE_SERVE_HINT']?.trim() || 'bamboozle serve';
+}
+
 /** Write a file only its owner can read; an existing file is narrowed before the new content lands. */
 function writePrivate(path: string, content: string): void {
   if (existsSync(path)) chmodSync(path, 0o600);
