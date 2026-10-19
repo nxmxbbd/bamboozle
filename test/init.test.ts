@@ -137,6 +137,21 @@ test('init --force replaces the printer and keeps the rest of the config, a cust
   assert.ok(!readFileSync(opts.configPath, 'utf8').includes('oldcode1'), 'the old inline code is gone');
 });
 
+test('init --force leaves a config with several printers alone: it sets up only one', async () => {
+  const opts = options();
+  mkdirSync(join(opts.configPath, '..'), { recursive: true });
+  const two = JSON.stringify({ printers: [
+    { name: 'A', host: '192.0.2.11', serial: '01P00A000000011', accessCode: 'codeaaaa' },
+    { name: 'B', host: '192.0.2.12', serial: '01P00A000000012', accessCode: 'codebbbb' },
+  ] });
+  writeFileSync(opts.configPath, two);
+  const { io, said, asked } = fakeIO(['192.0.2.10', '12345678', '', '']);
+  assert.equal(await init({ ...opts, force: true }, io), 1);
+  assert.deepEqual(asked, [], 'nothing was asked');
+  assert.equal(readFileSync(opts.configPath, 'utf8'), two, 'the file is untouched');
+  assert.ok(said.some((l) => l.includes('2 printers')), said.join('\n'));
+});
+
 test('init --force starts from scratch when the old config is not JSON', async () => {
   const opts = options();
   mkdirSync(join(opts.configPath, '..'), { recursive: true });

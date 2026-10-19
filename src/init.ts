@@ -65,8 +65,8 @@ function assertWritable(dir: string): void {
 /**
  * For --force: everything in the old config but its printers, so the
  * pairing location (storagePath) and the bridge, display and camera
- * settings survive. Unparseable JSON starts over; an unreadable file stops
- * init (null), since its storagePath could not be kept.
+ * settings survive. Unparseable JSON starts over; an unreadable file, or
+ * one with several printers (init sets up one), stops init (null).
  */
 function keptSettings(configPath: string, io: InitIO): Record<string, unknown> | null {
   let text: string;
@@ -86,7 +86,11 @@ function keptSettings(configPath: string, io: InitIO): Record<string, unknown> |
     io.say(`The config at ${configPath} is not valid JSON: starting a new one (a storage/ folder next to it is kept).`);
     return {};
   }
-  const { printers: _replaced, ...rest } = raw as Record<string, unknown>;
+  const { printers, ...rest } = raw as Record<string, unknown>;
+  if (Array.isArray(printers) && printers.length > 1) {
+    io.say(`The config at ${configPath} has ${printers.length} printers, and init sets up only one. Edit that file by hand instead; nothing was changed.`);
+    return null;
+  }
   return rest;
 }
 
