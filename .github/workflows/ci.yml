@@ -17,7 +17,7 @@ jobs:
       fail-fast: false
       matrix:
         # 22.18 is the oldest Node that strips types without a flag.
-        node: ['22.18', '22', '24']
+        node: ['22.18', '22', '24', '26']
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
