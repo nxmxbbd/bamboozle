@@ -3,9 +3,11 @@
 // Home app would receive. Advertises on loopback only, so running the tests
 // does not announce a bridge on the local network.
 
-import { test, after, before } from 'node:test';
+import { test, after, before, mock } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import fs, { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
+import { setTimeout as delay } from 'node:timers/promises';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -66,6 +68,7 @@ let client: HttpClient;
 let printer: PrinterAccessories;
 let camera: PrinterCamera;
 let db: HapAccessory[] = [];
+const warnings: string[] = [];
 
 before(async () => {
   storage = mkdtempSync(join(tmpdir(), 'bamboozle-hap-'));
@@ -89,7 +92,7 @@ before(async () => {
     ffmpeg: { path: 'ffmpeg', encoder: 'libx264', vaapiDevice: '/dev/dri/renderD128' },
   });
   camera.update({ status, available: true, name: 'H2C', now: new Date(), finishedAt: null });
-  bridge = await startBridge({ name: 'bamboozle test', port, bind: ['127.0.0.1'], storagePath: storage }, [
+  bridge = await startBridge({ name: 'bamboozle test', port, bind: ['127.0.0.1'], storagePath: storage, log: { warn: (m: string) => warnings.push(m) } }, [
     ...printer.accessories,
     camera.accessory,
   ]);
@@ -205,4 +208,36 @@ test('the camera serves an overlaid JPEG snapshot over HAP', async () => {
   const image = await client.getImage(640, 360, cameraAccessory().aid);
   assert.equal(image.subarray(0, 2).toString('hex'), 'ffd8');
   assert.ok(image.length > 5000, `a real picture, ${image.length} bytes`);
+});
+
+test('a full disk while the Home app changes a camera setting does not take the bridge down', async () => {
+  const camera = cameraAccessory();
+  const rtp = camera.services.find((s) => fullType(s.type) === CAMERA_STREAM_MANAGEMENT);
+  assert.ok(rtp, 'camera stream management');
+  const id = `${camera.aid}.${characteristic(rtp, Characteristic.Active.UUID).iid}`;
+  const hap = join(storage, 'hap');
+  const write = fs.writeFileSync;
+  mock.method(fs, 'writeFileSync', (file: fs.PathOrFileDescriptor, data: unknown, options?: fs.WriteFileOptions) => {
+    if (typeof file === 'string' && file.startsWith(hap)) {
+      write(file, '');
+      throw Object.assign(new Error('ENOSPC: no space left on device, write'), { code: 'ENOSPC' });
+    }
+    return write(file, data as string, options);
+  });
+  syncBuiltinESMExports();
+  try {
+    // HAP-NodeJS saves camera settings ~100 ms after the change, from a timer.
+    await client.setCharacteristics({ [id]: 0 });
+    await delay(400);
+  } finally {
+    mock.restoreAll();
+    syncBuiltinESMExports();
+  }
+  assert.ok(warnings.some((w) => /camera settings not saved: ENOSPC/.test(w)), warnings.join('\n'));
+
+  // Still serving, and the next change is saved.
+  await client.setCharacteristics({ [id]: 1 });
+  await delay(400);
+  const file = join(hap, `ControllerStorage.${bridge.identity.username.replaceAll(':', '')}.json`);
+  assert.ok(JSON.parse(readFileSync(file, 'utf8')), 'camera settings saved once there is space');
 });

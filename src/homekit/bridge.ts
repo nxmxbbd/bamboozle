@@ -82,6 +82,7 @@ export interface BridgeOptions {
   /** Interfaces or addresses to advertise on (hap-nodejs always listens on all); all when undefined. */
   bind?: string[];
   storagePath: string;
+  log?: Pick<Console, 'warn'>;
 }
 
 export interface RunningBridge {
@@ -109,6 +110,20 @@ export async function startBridge(options: BridgeOptions, accessories: Accessory
     .setCharacteristic(Characteristic.SerialNumber, identity.username)
     .setCharacteristic(Characteristic.FirmwareRevision, VERSION);
   bridge.addBridgedAccessories(accessories);
+
+  // HAP-NodeJS saves camera settings from a timer, where a failed save (a full
+  // disk) is an uncaught exception that ends the process. The saved file is
+  // intact either way, and every save writes the whole state, so report it and
+  // let the next change save again. Bridged accessories save through this one.
+  const storage = bridge.controllerStorage;
+  const save = storage.save.bind(storage);
+  storage.save = () => {
+    try {
+      save();
+    } catch (error) {
+      options.log?.warn(`camera settings not saved: ${(error as Error).message}`);
+    }
+  };
 
   let paired = false;
   const listeners: Array<(paired: boolean) => void> = [];

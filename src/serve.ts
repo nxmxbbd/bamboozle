@@ -60,7 +60,7 @@ export async function serve(config: Config, options: ServeOptions): Promise<() =
   });
 
   const bridge = await startBridge(
-    { name: config.bridge.name, port: config.bridge.port, storagePath: config.storagePath, ...(config.bridge.bind ? { bind: config.bridge.bind } : {}) },
+    { name: config.bridge.name, port: config.bridge.port, storagePath: config.storagePath, log, ...(config.bridge.bind ? { bind: config.bridge.bind } : {}) },
     printers.flatMap(({ accessories, camera }) => [...accessories.accessories, ...(camera ? [camera.accessory] : [])]),
   );
 
