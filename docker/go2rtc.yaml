@@ -1,0 +1,14 @@
+# The printer's camera, relayed for bamboozle. Put in the printer's IP
+# address and LAN access code.
+streams:
+  printer: rtspx://bblp:ACCESS_CODE@192.0.2.10:322/streaming/live/1
+
+# go2rtc's API shows the stream URL above, access code and all. So the API
+# and the RTSP server only listen on this machine, and WebRTC (which would
+# listen on every interface) is off.
+api:
+  listen: 127.0.0.1:1984
+rtsp:
+  listen: 127.0.0.1:8554
+webrtc:
+  listen: ""

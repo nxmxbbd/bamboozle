@@ -1,0 +1,7 @@
+# The image is built from package*.json, tsconfig*.json and src/ only.
+*
+!package.json
+!package-lock.json
+!tsconfig.json
+!tsconfig.build.json
+!src/
