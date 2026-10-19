@@ -61,6 +61,7 @@ test('a full disk while saving the pairing keys leaves the saved keys untouched'
   mkdirSync(hap, { recursive: true });
   writeFileSync(join(storage, 'bridge.json'), JSON.stringify({ username: '0E:11:22:33:44:56', pincode: '031-45-154', setupID: 'TS01' }));
   const info = join(hap, 'AccessoryInfo.0E1122334456.json');
+  // Not what publish() would save (other display name), so a save is attempted.
   const saved = savedAccessoryInfo();
   writeFileSync(info, saved);
 
