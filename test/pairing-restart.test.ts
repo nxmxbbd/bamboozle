@@ -51,7 +51,8 @@ function startProcess(port: number, preload: string[] = [], env: NodeJS.ProcessE
   return new Promise((resolve, reject) => {
     const lines = createInterface({ input: child.stdout! });
     lines.once('line', (line) => resolve({ child, info: JSON.parse(line) as Started['info'] }));
-    child.once('exit', (code) => reject(new Error(`bridge exited (${code}) before it was published: ${stderr.trim()}`)));
+    // 'close', not 'exit': only then has all of stderr been read.
+    child.once('close', (code) => reject(new Error(`bridge exited (${code}) before it was published: ${stderr.trim()}`)));
   });
 }
 

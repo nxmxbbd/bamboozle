@@ -228,7 +228,13 @@ test('a camera setting changed on a full disk is saved once there is space, with
   const hap = join(storage, 'hap');
   const file = join(hap, `ControllerStorage.${bridge.identity.username.replaceAll(':', '')}.json`);
   const saved = () => (existsSync(file) ? readFileSync(file, 'utf8') : null);
-  const before = saved(); // none yet on a bridge whose camera settings never changed
+  // Off and on again with space first, so there are saved settings to keep.
+  await client.setCharacteristics({ [id]: 0 });
+  await until(() => saved() !== null, 'a first save');
+  const first = saved();
+  await client.setCharacteristics({ [id]: 1 });
+  await until(() => saved() !== first, 'the camera turned on to be saved');
+  const before = saved();
   const write = fs.writeFileSync;
   let failed = 0;
   mock.method(fs, 'writeFileSync', (file: fs.PathOrFileDescriptor, data: unknown, options?: fs.WriteFileOptions) => {
