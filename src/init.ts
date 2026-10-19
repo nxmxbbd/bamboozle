@@ -1,7 +1,7 @@
 import { accessSync, chmodSync, constants, existsSync, lstatSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { createInterface } from 'node:readline/promises';
-import { ConfigError, parseConfig } from './config.ts';
+import { ConfigError, parseConfig, parseJson } from './config.ts';
 import { openToEveryone } from './paths.ts';
 import { isPrinterSerial } from './printer/serial.ts';
 
@@ -13,7 +13,7 @@ export interface InitOptions {
   name?: string;
   /** Camera relay URL given on the command line ('' = none; otherwise asked). */
   camera?: string;
-  /** Rewrite an existing config (the pairing in storage/ is kept). */
+  /** Set the printer up again in an existing config; everything else in it, the pairing too, is kept. */
   force: boolean;
   /** How to start the bridge with this config, for the closing hint. */
   serveCommand: string;
@@ -74,36 +74,48 @@ function assertWritable(dir: string): void {
   accessSync(existing, constants.W_OK);
 }
 
+/** What init --force keeps: every setting but the printers, and the one printer it replaces. */
+interface Kept {
+  settings: Record<string, unknown>;
+  previous?: Record<string, unknown>;
+}
+
 /**
  * For --force: everything in the old config but its printers, so the
  * pairing location (storagePath) and the bridge, display and camera
- * settings survive. Unparseable JSON starts over; an unreadable file, or
- * one with several printers (init sets up one), stops init (null).
+ * settings survive, plus the old printer for its name and camera URL. A
+ * file that cannot be read or parsed, settings that do not check out, or
+ * several printers (init sets up one) stop init before it asks anything
+ * (null): starting over would quietly drop a custom storagePath.
  */
-function keptSettings(configPath: string, io: InitIO): Record<string, unknown> | null {
-  let text: string;
-  try {
-    text = readFileSync(configPath, 'utf8');
-  } catch (error) {
-    io.say(`Cannot read the existing config ${configPath} (${(error as NodeJS.ErrnoException).code ?? 'error'}), so its settings could not be kept. Nothing was asked.`);
+function keptSettings(configPath: string, io: InitIO): Kept | null {
+  const leave = (why: string) => {
+    io.say(`${why}. Fix it, or remove it to start over; nothing was changed.`);
     return null;
-  }
+  };
   let raw: unknown;
   try {
-    raw = JSON.parse(text);
-  } catch {
-    raw = undefined;
+    raw = parseJson(readFileSync(configPath, 'utf8'), configPath);
+  } catch (error) {
+    if (error instanceof ConfigError) return leave(error.message);
+    return leave(`Cannot read the existing config ${configPath} (${(error as NodeJS.ErrnoException).code ?? 'error'})`);
   }
-  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
-    io.say(`The config at ${configPath} is not valid JSON: starting a new one (a storage/ folder next to it is kept).`);
-    return {};
-  }
-  const { printers, ...rest } = raw as Record<string, unknown>;
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return leave(`The config at ${configPath} is not a JSON object`);
+  const { printers, ...settings } = raw as Record<string, unknown>;
   if (Array.isArray(printers) && printers.length > 1) {
     io.say(`The config at ${configPath} has ${printers.length} printers, and init sets up only one. Edit that file by hand instead; nothing was changed.`);
     return null;
   }
-  return rest;
+  try {
+    // The printer is about to be replaced, so a stand-in checks the rest.
+    parseConfig({ ...settings, printers: [{ name: 'x', host: 'x', serial: 'X', accessCode: 'x' }] }, dirname(configPath));
+  } catch (error) {
+    if (!(error instanceof ConfigError)) throw error;
+    return leave(`The settings in ${configPath} do not work: ${error.message}`);
+  }
+  const first: unknown = Array.isArray(printers) ? printers[0] : undefined;
+  const previous = typeof first === 'object' && first !== null && !Array.isArray(first) ? (first as Record<string, unknown>) : undefined;
+  return previous ? { settings, previous } : { settings };
 }
 
 /** A typed serial, checked like the one from the certificate: it ends up in file names. */
@@ -139,8 +151,9 @@ export async function init(options: InitOptions, io: InitIO): Promise<number> {
     io.say('Your Home pairing lives next to it, so init leaves it alone. Edit the file, or run init --force to set up the printer again (the rest of the config and the pairing are kept).');
     return 1;
   }
-  const kept = exists ? keptSettings(configPath, io) : {};
+  const kept = exists ? keptSettings(configPath, io) : { settings: {} };
   if (kept === null) return 1;
+  const { settings, previous } = kept;
   // Find out now, not after the questions, whether the files can be written
   // (a container user facing a root-owned mount, say).
   try {
@@ -154,7 +167,7 @@ export async function init(options: InitOptions, io: InitIO): Promise<number> {
   // Below a directory anyone may write to (without the sticky bit /tmp has),
   // anyone can swap the config, the code file or the pairing keys: check the
   // config's directory and where the pairing keys live (a kept storagePath).
-  const keptStorage = typeof kept['storagePath'] === 'string' && kept['storagePath'].trim() !== '' ? kept['storagePath'].trim() : 'storage';
+  const keptStorage = typeof settings['storagePath'] === 'string' && settings['storagePath'].trim() !== '' ? settings['storagePath'].trim() : 'storage';
   for (const place of [dir, resolve(dir, keptStorage)]) {
     const open = openToEveryone(place);
     if (open) {
@@ -173,16 +186,31 @@ export async function init(options: InitOptions, io: InitIO): Promise<number> {
     io.say(`Could not read the serial from the printer (${(error as Error).message}).`);
     serial = await askSerial(io);
   }
-  const name = options.name?.trim() || (await io.ask(`Name in the Home app [${DEFAULT_NAME}]: `)).trim() || DEFAULT_NAME;
-  const camera = options.camera !== undefined
-    ? options.camera.trim()
-    : (await io.ask('Camera relay URL, e.g. rtsp://127.0.0.1:8554/printer (empty for none): ')).trim();
+  // With --force, the old printer's name and camera URL are the defaults.
+  const oldName = typeof previous?.['name'] === 'string' && previous['name'].trim() !== '' ? previous['name'].trim() : undefined;
+  const oldCamera = previous?.['camera'];
+  const oldSource = typeof oldCamera === 'object' && oldCamera !== null && typeof (oldCamera as Record<string, unknown>)['source'] === 'string'
+    ? ((oldCamera as Record<string, unknown>)['source'] as string)
+    : undefined;
+  const defaultName = oldName ?? DEFAULT_NAME;
+  const name = options.name?.trim() || (await io.ask(`Name in the Home app [${defaultName}]: `)).trim() || defaultName;
+  let camera: string;
+  if (options.camera !== undefined) camera = options.camera.trim();
+  else if (oldSource !== undefined) {
+    const answer = (await io.ask(`Camera relay URL [${oldSource}] ("none" for no camera): `)).trim();
+    camera = answer === '' ? oldSource : answer.toLowerCase() === 'none' ? '' : answer;
+  } else camera = (await io.ask('Camera relay URL, e.g. rtsp://127.0.0.1:8554/printer (empty for none): ')).trim();
 
   const printer: Record<string, unknown> = { name, host, serial };
+  // The same printer keeps what init does not ask about.
+  if (previous && typeof previous['serial'] === 'string' && previous['serial'].toUpperCase() === serial) {
+    if (previous['model'] !== undefined) printer['model'] = previous['model'];
+    if (previous['port'] !== undefined) printer['port'] = previous['port'];
+  }
   if (camera) printer['camera'] = { source: camera };
   // Check with the real parser before writing anything; an inline code stands in for the file.
   try {
-    parseConfig({ ...kept, printers: [{ ...printer, accessCode: code }] }, dir);
+    parseConfig({ ...settings, printers: [{ ...printer, accessCode: code }] }, dir);
   } catch (error) {
     if (!(error instanceof ConfigError)) throw error;
     io.say(`That does not work as a config: ${error.message}. Nothing was written.`);
@@ -192,7 +220,7 @@ export async function init(options: InitOptions, io: InitIO): Promise<number> {
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   const codeFile = join(dir, ACCESS_CODE_FILE);
   writePrivate(codeFile, `${code}\n`);
-  writePrivate(configPath, `${JSON.stringify({ printers: [{ ...printer, accessCodeFile: ACCESS_CODE_FILE }], ...kept }, null, 2)}\n`);
+  writePrivate(configPath, `${JSON.stringify({ printers: [{ ...printer, accessCodeFile: ACCESS_CODE_FILE }], ...settings }, null, 2)}\n`);
   io.say(`Wrote ${configPath} and ${codeFile} (readable only by you).`);
 
   const result = await io.probe(configPath);

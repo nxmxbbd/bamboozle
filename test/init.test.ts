@@ -189,14 +189,43 @@ test('init --force leaves a config with several printers alone: it sets up only 
   assert.ok(said.some((l) => l.includes('2 printers')), said.join('\n'));
 });
 
-test('init --force starts from scratch when the old config is not JSON', async () => {
+test('init --force leaves a config it cannot parse alone, and says where it breaks', async () => {
   const opts = options();
   mkdirSync(join(opts.configPath, '..'), { recursive: true });
-  writeFileSync(opts.configPath, '{ broken');
-  const { io, said } = fakeIO(['192.0.2.10', '12345678', '', '']);
-  assert.equal(await init({ ...opts, force: true }, io), 0);
-  assert.equal(loadConfig(opts.configPath).printers[0]?.host, '192.0.2.10');
-  assert.ok(said.some((l) => l.includes('not valid JSON')), said.join('\n'));
+  const broken = '{\n  "storagePath": "paired-state",\n}\n'; // the classic trailing comma
+  writeFileSync(opts.configPath, broken);
+  const { io, said, asked } = fakeIO(['192.0.2.10', '12345678', '', '']);
+  assert.equal(await init({ ...opts, force: true }, io), 1);
+  assert.deepEqual(asked, [], 'nothing was asked');
+  assert.equal(readFileSync(opts.configPath, 'utf8'), broken, 'the file is untouched');
+  assert.ok(said.some((l) => /not valid JSON at line \d/.test(l) && l.includes('remove it to start over')), said.join('\n'));
+});
+
+test('init --force checks the settings it keeps before asking anything', async () => {
+  const opts = options();
+  mkdirSync(join(opts.configPath, '..'), { recursive: true });
+  writeFileSync(opts.configPath, JSON.stringify({ printers: [], bridge: { port: '51900' } }));
+  const { io, said, asked } = fakeIO(['192.0.2.10', '12345678', '', '']);
+  assert.equal(await init({ ...opts, force: true }, io), 1);
+  assert.deepEqual(asked, [], 'nothing was asked');
+  assert.ok(said.some((l) => l.includes('bridge.port')), said.join('\n'));
+});
+
+test('init --force offers the old name and camera URL, and keeps model and port for the same printer', async () => {
+  const opts = options();
+  mkdirSync(join(opts.configPath, '..'), { recursive: true });
+  const old = { name: 'Workshop', host: '192.0.2.99', port: 8884, serial: '01P00A000000000', model: 'H2C', accessCode: 'oldcode1', camera: { source: 'rtsp://127.0.0.1:8554/printer' } };
+  writeFileSync(opts.configPath, JSON.stringify({ printers: [old] }));
+  const keep = fakeIO(['192.0.2.10', '12345678', '', '']); // Enter through name and camera
+  assert.equal(await init({ ...opts, force: true }, keep.io), 0);
+  const kept = loadConfig(opts.configPath).printers[0];
+  assert.deepEqual([kept?.name, kept?.cameraSource, kept?.model, kept?.port, kept?.host], ['Workshop', 'rtsp://127.0.0.1:8554/printer', 'H2C', 8884, '192.0.2.10']);
+  assert.ok(keep.asked.some((q) => q.includes('[Workshop]')) && keep.asked.some((q) => q.includes('[rtsp://127.0.0.1:8554/printer]')), keep.asked.join('\n'));
+
+  const none = fakeIO(['192.0.2.10', '12345678', 'Garage', 'none']);
+  assert.equal(await init({ ...opts, force: true }, none.io), 0);
+  const changed = loadConfig(opts.configPath).printers[0];
+  assert.deepEqual([changed?.name, changed?.cameraSource], ['Garage', undefined]);
 });
 
 test('init falls back to asking for the serial, and re-asks empty required answers', async () => {

@@ -273,9 +273,13 @@ export function loadConfig(path: string): Config {
   } catch (error) {
     throw new ConfigError(`cannot read config ${path} (${(error as NodeJS.ErrnoException).code ?? 'read error'})`);
   }
-  let raw: unknown;
+  return parseConfig(parseJson(text, path), dirname(resolve(path)));
+}
+
+/** JSON.parse for a config file whose error names only the line (see below). */
+export function parseJson(text: string, path: string): unknown {
   try {
-    raw = JSON.parse(text);
+    return JSON.parse(text);
   } catch (error) {
     // The parser's message quotes the input around the error, which can be
     // the access code. Report only where it is.
@@ -284,5 +288,4 @@ export function loadConfig(path: string): Config {
     const where = /line \d+/.test(message) ? ` at line ${line}` : line ? ` at line ${lineAt(text, Number(line))}` : '';
     throw new ConfigError(`config ${path} is not valid JSON${where}`);
   }
-  return parseConfig(raw, dirname(resolve(path)));
 }
