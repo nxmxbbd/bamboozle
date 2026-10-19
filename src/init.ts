@@ -217,16 +217,23 @@ export interface TtyInput {
  * echo). Backspace edits; escape sequences (arrow keys) are ignored; Ctrl+C,
  * or Ctrl+D on an empty line, cancels.
  */
+/** How long an ESC may wait for the rest of its sequence before it counts as the Esc key. */
+const LONE_ESC_MS = 100;
+
 export function promptLine(input: TtyInput, output: { write(text: string): unknown }, question: string, hidden: boolean): Promise<string> {
   return new Promise((resolve, reject) => {
     let value = '';
     let done = false;
     // Escape sequences: ESC, then CSI ("[" ... final byte 0x40-0x7e), SS3 ("O" + one byte), or one Alt+key byte.
     let escape: 'none' | 'start' | 'csi' | 'ss3' = 'none';
+    // An ESC that ends a read is either the Esc key or the start of a sequence
+    // whose rest is still on the way: only time tells, as in a terminal.
+    let lone: NodeJS.Timeout | undefined;
     // Every way out (Enter, cancel, an exception here or in setup) restores the terminal, once.
     const finish = (error?: Error) => {
       if (done) return;
       done = true;
+      clearTimeout(lone);
       input.off('data', onData);
       try {
         input.setRawMode(false);
@@ -239,6 +246,7 @@ export function promptLine(input: TtyInput, output: { write(text: string): unkno
       else resolve(value);
     };
     const onData = (chunk: string) => {
+      clearTimeout(lone); // more input: a pending ESC goes on as a sequence
       try {
         for (const ch of chunk) {
           if (done) return;
@@ -267,8 +275,11 @@ export function promptLine(input: TtyInput, output: { write(text: string): unkno
           value += ch;
           if (!hidden) output.write(ch);
         }
-        // A sequence arrives in one piece; an ESC that ends the chunk was the Esc key on its own.
-        if (escape === 'start') escape = 'none';
+        if (escape === 'start') {
+          lone = setTimeout(() => {
+            escape = 'none'; // nothing followed: it was the Esc key
+          }, LONE_ESC_MS);
+        }
       } catch (error) {
         finish(error as Error);
       }

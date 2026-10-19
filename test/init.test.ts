@@ -372,8 +372,21 @@ test('a lone Esc (its own keypress) does not eat the next character', async () =
   const answer = promptLine(t.input, t.output, 'Code: ', true);
   t.type('12');
   t.type('\u001b');
+  await new Promise((r) => setTimeout(r, 150)); // a person, not a terminal sequence
   t.type('34\r');
   assert.equal(await answer, '1234');
+});
+
+test('an arrow key split across reads at any point never lands in the answer', async () => {
+  for (const input of ['1234\u001b[D5678\r', '1234\u001bOA5678\r']) {
+    for (let cut = 1; cut < input.length; cut++) {
+      const t = fakeTty();
+      const answer = promptLine(t.input, t.output, 'Code: ', true);
+      t.type(input.slice(0, cut));
+      t.type(input.slice(cut));
+      assert.equal(await answer, '12345678', `${JSON.stringify(input)} cut at ${cut}`);
+    }
+  }
 });
 
 test('when echoing or setting up the terminal throws, the prompt fails and the terminal is restored', async () => {
