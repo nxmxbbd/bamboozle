@@ -193,11 +193,14 @@ export async function startBridge(options: BridgeOptions, accessories: Accessory
     isPaired: () => paired,
     onPairingChange: (listener) => listeners.push(listener),
     stop: async () => {
-      await bridge.unpublish(); // no more changes from here on
-      stopped = true;
-      // Save what is still queued or failed, rather than leave it to a timer
-      // that may never run.
-      if (pending || failing) storage.save();
+      try {
+        await bridge.unpublish(); // no more changes from here on
+      } finally {
+        stopped = true;
+        // Save what is still queued or failed, rather than leave it to a timer
+        // that may never run; also when unpublishing failed.
+        if (pending || failing) storage.save();
+      }
     },
   };
 }
