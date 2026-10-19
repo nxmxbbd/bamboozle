@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { chmodSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after } from 'node:test';
@@ -44,4 +44,21 @@ test('openToEveryone finds a directory on the way up that others could use to sw
   assert.equal(openToEveryone(join(open, 'not-yet'), 'win32'), null, 'Windows reports every directory as writable: no check');
   chmodSync(open, 0o775);
   assert.equal(openToEveryone(inner), null, 'group-writable is allowed (umask 002)');
+});
+
+test('openToEveryone follows a symlink: what lies above its target counts too', () => {
+  const base = mkdtempSync(join(tmpdir(), 'bamboozle-paths-'));
+  after(() => rmSync(base, { recursive: true, force: true }));
+  const shared = join(base, 'shared');
+  const safe = join(base, 'safe');
+  mkdirSync(join(shared, 'state'), { recursive: true });
+  mkdirSync(join(safe, 'state'), { recursive: true });
+  chmodSync(join(shared, 'state'), 0o700);
+  mkdirSync(join(base, 'private'), { mode: 0o700 });
+  symlinkSync(join(shared, 'state'), join(base, 'private', 'state'));
+  symlinkSync(join(safe, 'state'), join(base, 'private', 'fine'));
+  chmodSync(shared, 0o777);
+  assert.equal(openToEveryone(join(base, 'private', 'state')), shared, 'the link target sits in an open directory');
+  assert.equal(openToEveryone(join(base, 'private', 'state', 'to-create')), shared, 'and so does anything still to be created below it');
+  assert.equal(openToEveryone(join(base, 'private', 'fine')), null, 'a link to a private place is fine');
 });

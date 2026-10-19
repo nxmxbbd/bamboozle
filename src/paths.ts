@@ -1,4 +1,4 @@
-import { statSync } from 'node:fs';
+import { existsSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 
@@ -40,7 +40,29 @@ export function resolveConfigPath(flag: string | undefined, env: Env = process.e
  */
 export function openToEveryone(path: string, platform: NodeJS.Platform = process.platform): string | null {
   if (platform === 'win32') return null;
-  let current = resolve(path);
+  const lexical = resolve(path);
+  const found = walkUp(lexical);
+  if (found) return found;
+  // A symlink on the way leads somewhere else: its target and everything
+  // above that count as well. (The directories holding the links are
+  // covered by the walk above.)
+  let existing = lexical;
+  while (!existsSync(existing)) {
+    const up = dirname(existing);
+    if (up === existing) return null;
+    existing = up;
+  }
+  let real: string;
+  try {
+    real = realpathSync(existing);
+  } catch {
+    return null;
+  }
+  return real === existing ? null : walkUp(real);
+}
+
+function walkUp(start: string): string | null {
+  let current = start;
   let nearest = true;
   for (;;) {
     let mode: number | undefined;
