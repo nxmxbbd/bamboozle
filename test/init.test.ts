@@ -81,6 +81,20 @@ test('init stops before asking anything when it cannot write the config director
   assert.ok(said.some((l) => l.includes(join(blocker, 'bamboozle')) && l.includes('ENOTDIR')), said.join('\n'));
 });
 
+test('init refuses a kept storagePath that every user can write to, before asking', async () => {
+  const opts = options();
+  const configDir = join(opts.configPath, '..');
+  const shared = join(dir, `shared-${++n}`);
+  mkdirSync(configDir, { recursive: true });
+  mkdirSync(shared);
+  chmodSync(shared, 0o777);
+  writeFileSync(opts.configPath, JSON.stringify({ printers: [], storagePath: join(shared, 'state') }));
+  const { io, said, asked } = fakeIO(['192.0.2.10', '12345678', '', '']);
+  assert.equal(await init({ ...opts, force: true }, io), 1);
+  assert.deepEqual(asked, [], 'nothing was asked');
+  assert.ok(said.some((l) => l.includes(shared) && l.includes('writable by every user')), said.join('\n'));
+});
+
 test('init stops before asking when the config directory is a dangling symlink', async () => {
   const base = join(dir, `dangling-${++n}`);
   mkdirSync(base);

@@ -1,6 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { defaultConfigPath, resolveConfigPath } from '../src/paths.ts';
+import { chmodSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { after } from 'node:test';
+import { defaultConfigPath, openToEveryone, resolveConfigPath } from '../src/paths.ts';
 
 const home = () => '/home/someone';
 
@@ -21,4 +25,21 @@ test('degenerate inputs: empty flag refused, blank env ignored, relative XDG ign
   assert.throws(() => defaultConfigPath({}, () => ''), /cannot find your home directory/);
   // An absolute XDG_CONFIG_HOME does not need a home directory at all.
   assert.equal(defaultConfigPath({ XDG_CONFIG_HOME: '/xdg' }, () => ''), '/xdg/bamboozle/config.json');
+});
+
+test('openToEveryone finds a directory on the way up that any user may write to, unless it is sticky', () => {
+  const base = mkdtempSync(join(tmpdir(), 'bamboozle-paths-')); // 0700, under a sticky /tmp
+  after(() => rmSync(base, { recursive: true, force: true }));
+  const open = join(base, 'open');
+  const inner = join(open, 'inner');
+  mkdirSync(inner, { recursive: true });
+  chmodSync(inner, 0o700);
+  assert.equal(openToEveryone(inner), null, 'nothing open yet');
+  chmodSync(open, 0o777);
+  assert.equal(openToEveryone(inner), open, 'a private directory inside an open one can be swapped out');
+  assert.equal(openToEveryone(join(inner, 'not', 'there', 'yet')), open, 'a path to be created is judged by what exists');
+  chmodSync(open, 0o1777);
+  assert.equal(openToEveryone(inner), null, 'sticky, like /tmp');
+  chmodSync(open, 0o775);
+  assert.equal(openToEveryone(inner), null, 'group-writable is allowed (umask 002)');
 });

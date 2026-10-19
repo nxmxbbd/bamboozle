@@ -1,5 +1,6 @@
+import { statSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { isAbsolute, join } from 'node:path';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
 
 export type Env = Readonly<Record<string, string | undefined>>;
 
@@ -27,4 +28,26 @@ export function resolveConfigPath(flag: string | undefined, env: Env = process.e
   const fromEnv = env['BAMBOOZLE_CONFIG']?.trim();
   if (fromEnv) return fromEnv;
   return defaultConfigPath(env, home);
+}
+
+/**
+ * The first directory at or above `path` that any user may write to without
+ * the sticky bit (which /tmp has): anyone could swap out whatever lies below
+ * it, config and pairing keys included. Paths that do not exist yet are
+ * judged by what exists above them. null when there is none.
+ */
+export function openToEveryone(path: string): string | null {
+  let current = resolve(path);
+  for (;;) {
+    let mode: number | undefined;
+    try {
+      mode = statSync(current).mode;
+    } catch {
+      // not there (yet)
+    }
+    if (mode !== undefined && mode & 0o002 && !(mode & 0o1000)) return current;
+    const up = dirname(current);
+    if (up === current) return null;
+    current = up;
+  }
 }

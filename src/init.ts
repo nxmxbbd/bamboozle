@@ -1,7 +1,8 @@
 import { accessSync, chmodSync, constants, existsSync, lstatSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { ConfigError, parseConfig } from './config.ts';
+import { openToEveryone } from './paths.ts';
 import { isPrinterSerial } from './printer/serial.ts';
 
 export interface InitOptions {
@@ -150,12 +151,16 @@ export async function init(options: InitOptions, io: InitIO): Promise<number> {
     io.say(`Cannot write to ${dir} (${(error as NodeJS.ErrnoException).code ?? 'error'}${as}). Make it writable for that user, or put the config elsewhere with --config.`);
     return 1;
   }
-  // In a directory anyone may write to (and without the sticky bit, unlike
-  // /tmp), anyone can replace the config, the code file or the pairing keys.
-  const mode = existsSync(dir) ? statSync(dir).mode : 0;
-  if (mode & 0o002 && !(mode & 0o1000)) {
-    io.say(`${dir} is writable by every user on this machine, so anyone could swap the config, the access code or the pairing keys. Run chmod 700 on it (or at least chmod o-w), then init again.`);
-    return 1;
+  // Below a directory anyone may write to (without the sticky bit /tmp has),
+  // anyone can swap the config, the code file or the pairing keys: check the
+  // config's directory and where the pairing keys live (a kept storagePath).
+  const keptStorage = typeof kept['storagePath'] === 'string' && kept['storagePath'].trim() !== '' ? kept['storagePath'].trim() : 'storage';
+  for (const place of [dir, resolve(dir, keptStorage)]) {
+    const open = openToEveryone(place);
+    if (open) {
+      io.say(`${open} is writable by every user on this machine, so anyone could swap the config, the access code or the pairing keys. Run chmod 700 on it (or at least chmod o-w), then init again.`);
+      return 1;
+    }
   }
 
   const host = options.host?.trim() || (await required(io, 'Printer IP address (printer screen, network / LAN settings): '));
