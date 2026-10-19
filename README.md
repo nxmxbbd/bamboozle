@@ -22,7 +22,7 @@ Not a fan of the fan? You can show progress as a window blind, a lightbulb or a 
 
 When you point bamboozle at a video relay (more on that below), the Home app gets a camera tile with a status overlay: state, progress, time left, estimated finish time, layer count and temperatures, drawn over the live stream, plus a warning pill when the printer reports an HMS message or a print error. The overlay leaves the bottom-left corner free so the Home app can draw its own snapshot age label there.
 
-![The Home app room view with sensors and a camera tile](docs/home.png)
+![The Home app while printing and after the print: sensors, the camera tile with its overlay, and the progress fan](docs/home.webp)
 
 ![The camera overlay in every printer state](docs/overlay.jpg)
 
