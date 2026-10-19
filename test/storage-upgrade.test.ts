@@ -82,12 +82,14 @@ test('a paired 0.1.0 storage folder comes up as the same bridge, with its ids an
     ffmpeg: { path: 'ffmpeg', encoder: 'libx264', vaapiDevice: '/dev/dri/renderD128' },
   });
   const port = await freePort();
-  bridge = await startBridge({ name: 'bamboozle test', port, bind: ['127.0.0.1'], storagePath: storage }, [...printer.accessories, camera.accessory]);
+  // In reverse order: a fresh id cache would number the camera first, so equal
+  // ids prove the 0.1.0 cache was read, not just that numbering starts the same.
+  bridge = await startBridge({ name: 'bamboozle test', port, bind: ['127.0.0.1'], storagePath: storage }, [camera.accessory, ...printer.accessories]);
   assert.equal(bridge.isPaired(), true);
 
   client = new HttpClient(bridge.identity.username, '127.0.0.1', port, keys);
   const db = ((await client.getAccessories()) as unknown as { accessories: Ids[] }).accessories;
-  const ids = db.map((a) => ({
+  const ids = [...db].sort((a, b) => a.aid - b.aid).map((a) => ({
     aid: a.aid,
     services: a.services.map((s) => ({ iid: s.iid, type: fullType(s.type), characteristics: s.characteristics.map((c) => ({ iid: c.iid, type: fullType(c.type) })) })),
   }));
