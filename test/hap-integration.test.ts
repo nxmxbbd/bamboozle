@@ -5,7 +5,7 @@
 
 import { test, after, before, mock } from 'node:test';
 import assert from 'node:assert/strict';
-import fs, { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import fs, { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { syncBuiltinESMExports } from 'node:module';
 import { setTimeout as delay } from 'node:timers/promises';
 import { createServer } from 'node:net';
@@ -216,6 +216,9 @@ test('a full disk while the Home app changes a camera setting does not take the 
   assert.ok(rtp, 'camera stream management');
   const id = `${camera.aid}.${characteristic(rtp, Characteristic.Active.UUID).iid}`;
   const hap = join(storage, 'hap');
+  const file = join(hap, `ControllerStorage.${bridge.identity.username.replaceAll(':', '')}.json`);
+  const saved = () => (existsSync(file) ? readFileSync(file, 'utf8') : null);
+  const before = saved(); // none yet on a bridge whose camera settings never changed
   const write = fs.writeFileSync;
   mock.method(fs, 'writeFileSync', (file: fs.PathOrFileDescriptor, data: unknown, options?: fs.WriteFileOptions) => {
     if (typeof file === 'string' && file.startsWith(hap)) {
@@ -235,9 +238,17 @@ test('a full disk while the Home app changes a camera setting does not take the 
   }
   assert.ok(warnings.some((w) => /camera settings not saved: ENOSPC/.test(w)), warnings.join('\n'));
 
-  // Still serving, and the next change is saved.
+  assert.equal(saved(), before, 'the saved settings are untouched');
+
+  // Still serving, and changes are saved again once there is space.
   await client.setCharacteristics({ [id]: 1 });
   await delay(400);
-  const file = join(hap, `ControllerStorage.${bridge.identity.username.replaceAll(':', '')}.json`);
-  assert.ok(JSON.parse(readFileSync(file, 'utf8')), 'camera settings saved once there is space');
+  const on = saved();
+  assert.ok(on !== null && JSON.parse(on), 'the camera turned on again is saved');
+  await client.setCharacteristics({ [id]: 0 });
+  await delay(400);
+  assert.notEqual(saved(), on, 'the camera turned off is saved');
+  await client.setCharacteristics({ [id]: 1 });
+  await delay(400);
+  assert.equal(saved(), on, 'and on again');
 });
