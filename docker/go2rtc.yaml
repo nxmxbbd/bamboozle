@@ -1,5 +1,7 @@
 # The printer's camera, relayed for bamboozle. Put in the printer's IP
 # address and LAN access code, then chmod 600 this file.
-# (Which ports go2rtc opens is set in compose.yaml: RTSP on this machine only.)
+# This file holds only the stream. Which ports go2rtc opens is set on its
+# command line in compose.yaml (RTSP on this machine only); running go2rtc
+# some other way, see the README's camera section.
 streams:
   printer: rtspx://bblp:ACCESS_CODE@192.0.2.10:322/streaming/live/1

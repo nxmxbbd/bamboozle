@@ -155,6 +155,12 @@ A relay is good anyway: every Home app viewer shares the relay's one connection 
 
 **go2rtc security note:** go2rtc's API endpoints (`/api/streams`, `/api/config`) will happily show the source URL, access code included. Bind the go2rtc API to localhost (or turn it off), or firewall it. Also mind what happens when its config file is missing or has a typo: go2rtc shrugs and starts its API, RTSP and WebRTC on every interface. The `compose.yaml` in `docker/` therefore sets go2rtc's ports on its command line, where `go2rtc.yaml` cannot undo them: RTSP on localhost, everything else off.
 
+Running go2rtc yourself, without the compose file? Start it the same way, with the stream in `go2rtc.yaml` and the ports on the command line:
+
+```sh
+go2rtc -config go2rtc.yaml -config '{"api":{"listen":""},"rtsp":{"listen":"127.0.0.1:8554"},"webrtc":{"listen":""},"srtp":{"listen":""}}'
+```
+
 ## Configure and pair
 
 Now to introduce them. The quick way:

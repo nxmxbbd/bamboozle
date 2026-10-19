@@ -173,7 +173,6 @@ export class PrinterCamera implements CameraStreamingDelegate {
   readonly #idleMs: number;
   readonly #preparedTtlMs: number;
   readonly #freshMs: number;
-  /** Background snapshot refreshes that failed in a row. */
   /** Failed background refreshes in a row, per snapshot size. */
   #refreshFailures = new Map<string, number>();
   readonly #streams = new Map<string, Stream>();
