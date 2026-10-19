@@ -60,19 +60,21 @@ The short version, once the package exists:
 npm install -g @nxmxbbd/bamboozle
 ```
 
-Then set up your config in one go:
+Then let it set itself up:
 
 ```sh
 bamboozle init
 ```
 
-`init` asks for the printer IP and access code, reads the serial from the printer's TLS certificate, writes the config and an access-code file, runs a quick connectivity probe, and shows the pairing QR code right in the terminal. One command, zero config files to hand-write.
+`init` asks for the printer IP and access code (the code is not echoed), reads the serial from the printer's TLS certificate, writes the config and an access-code file to `~/.config/bamboozle/`, and checks that the printer answers. One command, zero config files to hand-write.
 
 Then start the bridge:
 
 ```sh
 bamboozle serve
 ```
+
+While it is not paired, `serve` shows a QR code in the terminal. Point the iPhone camera at it.
 <!-- /DRAFT -->
 
 ## Install (from source)
@@ -84,19 +86,19 @@ git clone https://github.com/nxmxbbd/bamboozle.git && cd bamboozle
 npm ci --omit=dev
 ```
 
-Two commands. You have survived worse.
+Two commands. You have survived worse. From a checkout, `node src/cli.ts` plays the part of the `bamboozle` command.
 
 ## Printer prep
 
-bamboozle needs the printer's access code, and the code belongs in a file, not on a command line where your shell might remember it, and not in the config where you might accidentally commit it:
+You need two things from the printer's touchscreen, both in its network / LAN settings: the IP address and the LAN access code. Writing the config by hand? Grab the serial number too.
+
+The access code belongs in a file, not on a command line where your shell might remember it, and not in the config where you might accidentally commit it. `init` takes care of that. Doing it yourself:
 
 ```sh
 (umask 077; read -rsp 'Access code: ' code && printf '%s' "$code" > printer.code)
 ```
 
 (That keeps the code out of your shell history. Opening `printer.code` in an editor works too: surrounding whitespace and the final newline are ignored. Then `chmod 600 printer.code`.)
-
-Find the access code, serial number and IP on the printer's touchscreen, in its network / LAN settings.
 
 ## Camera
 
@@ -152,7 +154,25 @@ volumes:
 
 ## Configure and pair
 
-Now to introduce them. Create `config.json` next to the code you cloned. Keep it private (`chmod 600`):
+Now to introduce them. The quick way:
+
+```sh
+node src/cli.ts init
+```
+
+It asks for the IP and the access code (typing the code shows nothing, on purpose), reads the serial from the printer's certificate, asks for a name and an optional camera relay URL, writes everything to `~/.config/bamboozle/` (readable only by you) and checks that the printer answers. It will not overwrite an existing config, because your Home pairing lives next to it; `init --force` rewrites the config and keeps the pairing.
+
+Then start the bridge:
+
+```sh
+node src/cli.ts serve
+```
+
+While the bridge is not paired, `serve` shows a QR code: point the iPhone camera at it. No camera handy? In the Home app choose **Add Accessory**, then **More options**, pick the bridge and enter the code printed above the QR code.
+
+**Where the config lives.** `--config <file>` wins, then `$BAMBOOZLE_CONFIG`, then `$XDG_CONFIG_HOME/bamboozle/config.json` (usually `~/.config/bamboozle/config.json`). Pairing keys and certificate pins sit in `storage/` next to the config: keep one config and you keep one bridge.
+
+**By hand.** Prefer to write the config yourself? Put this in a `config.json` (`chmod 600`) next to `printer.code`:
 
 ```json
 {
@@ -177,14 +197,6 @@ node src/cli.ts probe --config config.json
 ```
 
 `probe` connects to every configured printer, grabs one status report, prints it as JSON and exits. If all printers respond, you're good. If not, that printer shows `"ok": false`, plus the error when there was one.
-
-Now start the bridge:
-
-```sh
-node src/cli.ts serve --config config.json
-```
-
-On the first start it prints a setup code and a setup URI. In the Home app: **Add Accessory**, then **More options**, pick the bridge and enter the code. (Or encode the URI as a QR code and scan it.)
 
 Want to see how it looks before printing anything? `serve --simulate` feeds a simulated print cycle into the Home app, complete with progress, temperatures, and a brief simulated fault at the halfway mark. The printer need not be on.
 

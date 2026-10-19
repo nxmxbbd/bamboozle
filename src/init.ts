@@ -1,0 +1,208 @@
+import { chmodSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { createInterface } from 'node:readline/promises';
+import { ConfigError, parseConfig } from './config.ts';
+
+export interface InitOptions {
+  configPath: string;
+  /** Printer address given on the command line (otherwise asked). */
+  host?: string;
+  /** Name in the Home app given on the command line (otherwise asked). */
+  name?: string;
+  /** Camera relay URL given on the command line ('' = none; otherwise asked). */
+  camera?: string;
+  /** Rewrite an existing config (the pairing in storage/ is kept). */
+  force: boolean;
+  /** How to start the bridge with this config, for the closing hint. */
+  serveCommand: string;
+}
+
+export interface InitIO {
+  /** Ask one question; an empty answer resolves ''. Hidden answers are not echoed. */
+  ask(question: string, hidden?: boolean): Promise<string>;
+  say(line: string): void;
+  readSerial(host: string): Promise<string>;
+  probe(configPath: string): Promise<{ ok: true; summary: string } | { ok: false; error: string }>;
+}
+
+export const ACCESS_CODE_FILE = 'printer.code';
+const DEFAULT_NAME = '3D Printer';
+const TRIES = 3;
+
+/** Write a file only its owner can read; an existing file is narrowed before the new content lands. */
+function writePrivate(path: string, content: string): void {
+  if (existsSync(path)) chmodSync(path, 0o600);
+  writeFileSync(path, content, { mode: 0o600 });
+}
+
+async function required(io: InitIO, question: string, hidden = false): Promise<string> {
+  for (let attempt = 0; attempt < TRIES; attempt++) {
+    const answer = (await io.ask(question, hidden)).trim();
+    if (answer) return answer;
+    if (attempt < TRIES - 1) io.say('This one is needed.');
+  }
+  throw new Error(`no answer to: ${question.trim()}`);
+}
+
+/**
+ * Write a working config for one printer: ask for the address and the access
+ * code, read the serial from the printer's certificate, check everything
+ * with the real config parser, write the files (0600), and probe.
+ */
+export async function init(options: InitOptions, io: InitIO): Promise<number> {
+  const { configPath } = options;
+  const dir = dirname(configPath);
+  if (existsSync(configPath) && !options.force) {
+    io.say(`There is already a config at ${configPath}.`);
+    io.say('Your Home pairing lives next to it, so init leaves it alone. Edit the file, or run init --force to rewrite it (the pairing in storage/ is kept).');
+    return 1;
+  }
+
+  const host = options.host?.trim() || (await required(io, 'Printer IP address (printer screen, network / LAN settings): '));
+  const code = await required(io, 'LAN access code (same screen; typing is hidden): ', true);
+  let serial: string;
+  try {
+    serial = await io.readSerial(host);
+    io.say(`Found the printer: serial ${serial}.`);
+  } catch (error) {
+    io.say(`Could not read the serial from the printer (${(error as Error).message}).`);
+    serial = (await required(io, 'Printer serial number (printer screen, device info): ')).toUpperCase();
+  }
+  const name = options.name?.trim() || (await io.ask(`Name in the Home app [${DEFAULT_NAME}]: `)).trim() || DEFAULT_NAME;
+  const camera = options.camera !== undefined
+    ? options.camera.trim()
+    : (await io.ask('Camera relay URL, e.g. rtsp://127.0.0.1:8554/printer (empty for none): ')).trim();
+
+  const printer: Record<string, unknown> = { name, host, serial };
+  if (camera) printer['camera'] = { source: camera };
+  // Check with the real parser before writing anything; an inline code stands in for the file.
+  try {
+    parseConfig({ printers: [{ ...printer, accessCode: code }] }, dir);
+  } catch (error) {
+    if (!(error instanceof ConfigError)) throw error;
+    io.say(`That does not work as a config: ${error.message}. Nothing was written.`);
+    return 1;
+  }
+
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const codeFile = join(dir, ACCESS_CODE_FILE);
+  writePrivate(codeFile, `${code}\n`);
+  writePrivate(configPath, `${JSON.stringify({ printers: [{ ...printer, accessCodeFile: ACCESS_CODE_FILE }] }, null, 2)}\n`);
+  io.say(`Wrote ${configPath} and ${codeFile} (readable only by you).`);
+
+  const result = await io.probe(configPath);
+  if (!result.ok) {
+    io.say(`The printer did not send a status yet: ${result.error}`);
+    io.say('Check the address and the access code (edit the files above), then try "bamboozle probe".');
+    return 1;
+  }
+  io.say(`The printer answers: ${result.summary}.`);
+  io.say(`Next: run "${options.serveCommand}" and scan the code it shows with the iPhone camera.`);
+  return 0;
+}
+
+/** The bits of a terminal input stream promptLine needs. */
+export interface TtyInput {
+  setRawMode(mode: boolean): unknown;
+  setEncoding(encoding: BufferEncoding): unknown;
+  resume(): unknown;
+  pause(): unknown;
+  on(event: 'data', listener: (chunk: string) => void): unknown;
+  off(event: 'data', listener: (chunk: string) => void): unknown;
+}
+
+/**
+ * Read one line from a terminal in raw mode, echoing it ourselves, or not at
+ * all for a hidden answer (readline offers no supported way to stop its
+ * echo). Backspace edits; escape sequences (arrow keys) are ignored; Ctrl+C,
+ * or Ctrl+D on an empty line, cancels.
+ */
+export function promptLine(input: TtyInput, output: { write(text: string): unknown }, question: string, hidden: boolean): Promise<string> {
+  return new Promise((resolve, reject) => {
+    let value = '';
+    // Escape sequences: ESC, then CSI ("[" ... final byte 0x40-0x7e), SS3 ("O" + one byte), or one Alt+key byte.
+    let escape: 'none' | 'start' | 'csi' | 'ss3' = 'none';
+    output.write(question);
+    input.setEncoding('utf8');
+    input.setRawMode(true);
+    input.resume();
+    const finish = (error?: Error) => {
+      input.off('data', onData);
+      input.setRawMode(false);
+      input.pause();
+      output.write('\n');
+      if (error) reject(error);
+      else resolve(value);
+    };
+    const onData = (chunk: string) => {
+      for (const ch of chunk) {
+        if (escape === 'start') {
+          escape = ch === '[' ? 'csi' : ch === 'O' ? 'ss3' : 'none';
+          continue;
+        }
+        if (escape === 'csi') {
+          if (ch >= '@' && ch <= '~') escape = 'none';
+          continue;
+        }
+        if (escape === 'ss3') {
+          escape = 'none';
+          continue;
+        }
+        if (ch === '\u001b') {
+          escape = 'start';
+          continue;
+        }
+        if (ch === '\r' || ch === '\n') return finish();
+        if (ch === '\u0003' || (ch === '\u0004' && value === '')) return finish(new Error('cancelled'));
+        if (ch === '\u007f' || ch === '\b') {
+          if (value) {
+            value = [...value].slice(0, -1).join('');
+            if (!hidden) output.write('\b \b');
+          }
+          continue;
+        }
+        if (ch < ' ') continue;
+        value += ch;
+        if (!hidden) output.write(ch);
+      }
+    };
+    input.on('data', onData);
+  });
+}
+
+/**
+ * Questions on a terminal (raw mode, hidden input for secrets), or one
+ * answer per line when stdin is a pipe or a file.
+ */
+export function terminalIO(
+  readSerial: InitIO['readSerial'],
+  probe: InitIO['probe'],
+): InitIO & { close(): void } {
+  const stdin = process.stdin;
+  const tty = stdin.isTTY === true;
+  const lines: string[] = [];
+  const waiting: Array<(line: string) => void> = [];
+  let ended = false;
+  const rl = tty ? null : createInterface({ input: stdin, terminal: false });
+  rl?.on('line', (line) => (waiting.length > 0 ? waiting.shift()?.(line) : lines.push(line)));
+  rl?.on('close', () => {
+    ended = true;
+    for (const resolve of waiting.splice(0)) resolve('');
+  });
+  const nextLine = (): Promise<string> =>
+    lines.length > 0 ? Promise.resolve(lines.shift() as string) : ended ? Promise.resolve('') : new Promise((resolve) => waiting.push(resolve));
+
+  return {
+    async ask(question, hidden = false) {
+      if (tty) return promptLine(stdin, process.stdout, question, hidden);
+      process.stdout.write(question);
+      const answer = await nextLine();
+      process.stdout.write(hidden ? '\n' : `${answer}\n`);
+      return answer;
+    },
+    say: (line) => console.log(line),
+    readSerial,
+    probe,
+    close: () => rl?.close(),
+  };
+}

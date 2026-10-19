@@ -5,6 +5,7 @@ import { resolveFonts } from './camera/fonts.ts';
 import type { OverlayFonts } from './camera/overlay.ts';
 import { startBridge } from './homekit/bridge.ts';
 import { toDisplay } from './homekit/display.ts';
+import { pairingLines } from './homekit/pairing.ts';
 import { PrinterAccessories } from './homekit/printer-accessory.ts';
 import { PrinterClient } from './printer/client.ts';
 import { filePinStore } from './printer/pinned-tls.ts';
@@ -14,6 +15,8 @@ export interface ServeOptions {
   /** Replace every printer with a simulated print cycle (for trying displays). */
   simulate: boolean;
   log?: Pick<Console, 'log' | 'warn'>;
+  /** The log goes to a terminal: draw the pairing QR code with ANSI colours. */
+  tty?: boolean;
 }
 
 // Clock-dependent overlay text (ETA weekday, finish time) is refreshed this
@@ -104,10 +107,7 @@ export async function serve(config: Config, options: ServeOptions): Promise<() =
   );
   const announce = (paired: boolean) => {
     if (paired) log.log('paired with a Home app');
-    else {
-      log.log(`not paired: in the Home app choose Add Accessory, then More options, then "${config.bridge.name}", and enter ${bridge.identity.pincode}`);
-      log.log(`setup URI (encode as a QR code to scan instead): ${bridge.setupURI}`);
-    }
+    else for (const line of pairingLines(config.bridge.name, bridge.identity.pincode, bridge.setupURI, options.tty ?? false)) log.log(line);
   };
   announce(bridge.isPaired());
   bridge.onPairingChange(announce);
