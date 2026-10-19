@@ -165,7 +165,7 @@ bamboozle init
 
 (In Docker that's `docker compose run --rm bamboozle init`; from a checkout, `node src/cli.ts init`.)
 
-It asks for the IP and the access code (typing the code shows nothing, on purpose), reads the serial from the printer's certificate, asks for a name and an optional camera relay URL, writes everything to `~/.config/bamboozle/` (`data/` in Docker; readable only by you) and checks that the printer answers. It will not overwrite an existing config, because your Home pairing lives next to it; `init --force` rewrites the config and keeps the pairing.
+It asks for the IP and the access code (typing the code shows nothing, on purpose), reads the serial from the printer's certificate, asks for a name and an optional camera relay URL, writes everything to `~/.config/bamboozle/` (`data/` in Docker; readable only by you) and checks that the printer answers. It will not overwrite an existing config, because your Home pairing lives next to it; `init --force` sets up the printer again and keeps everything else: the pairing, and your bridge, display and camera settings.
 
 Then start the bridge:
 

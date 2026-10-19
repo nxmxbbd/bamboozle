@@ -99,6 +99,37 @@ test('init leaves an existing config (and its pairing) alone unless forced', asy
   assert.equal(readFileSync(join(configDir, 'storage', 'bridge.json'), 'utf8'), 'identity', 'the pairing survives --force');
 });
 
+test('init --force replaces the printer and keeps the rest of the config, a custom storagePath included', async () => {
+  const opts = options();
+  mkdirSync(join(opts.configPath, '..'), { recursive: true });
+  writeFileSync(opts.configPath, JSON.stringify({
+    printers: [{ name: 'Old', host: '192.0.2.99', serial: '01P00A000000009', accessCode: 'oldcode1' }],
+    storagePath: 'paired-state',
+    bridge: { name: 'Workshop bridge', port: 51900 },
+    display: { progress: ['window'] },
+  }));
+  const { io } = fakeIO(['192.0.2.10', '12345678', '', '']);
+  assert.equal(await init({ ...opts, force: true }, io), 0);
+  const config = loadConfig(opts.configPath);
+  assert.equal(config.storagePath, join(opts.configPath, '..', 'paired-state'), 'the pairing location is kept');
+  assert.deepEqual([config.bridge.name, config.bridge.port], ['Workshop bridge', 51900]);
+  assert.deepEqual(config.display.progress, ['window']);
+  assert.equal(config.printers.length, 1);
+  assert.equal(config.printers[0]?.host, '192.0.2.10');
+  assert.equal(config.printers[0]?.accessCode, '12345678');
+  assert.ok(!readFileSync(opts.configPath, 'utf8').includes('oldcode1'), 'the old inline code is gone');
+});
+
+test('init --force starts from scratch when the old config is not JSON', async () => {
+  const opts = options();
+  mkdirSync(join(opts.configPath, '..'), { recursive: true });
+  writeFileSync(opts.configPath, '{ broken');
+  const { io, said } = fakeIO(['192.0.2.10', '12345678', '', '']);
+  assert.equal(await init({ ...opts, force: true }, io), 0);
+  assert.equal(loadConfig(opts.configPath).printers[0]?.host, '192.0.2.10');
+  assert.ok(said.some((l) => l.includes('not valid JSON')), said.join('\n'));
+});
+
 test('init falls back to asking for the serial, and re-asks empty required answers', async () => {
   const opts = options();
   const { io, said } = fakeIO(['', '192.0.2.10', '12345678', '01p00a000000001', '', ''], { serial: new Error('connection refused') });

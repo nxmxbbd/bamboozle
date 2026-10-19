@@ -1,4 +1,4 @@
-import { accessSync, chmodSync, constants, existsSync, mkdirSync, statSync, writeFileSync } from 'node:fs';
+import { accessSync, chmodSync, constants, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { ConfigError, parseConfig } from './config.ts';
@@ -62,6 +62,34 @@ function assertWritable(dir: string): void {
   accessSync(existing, constants.W_OK);
 }
 
+/**
+ * For --force: everything in the old config but its printers, so the
+ * pairing location (storagePath) and the bridge, display and camera
+ * settings survive. Unparseable JSON starts over; an unreadable file stops
+ * init (null), since its storagePath could not be kept.
+ */
+function keptSettings(configPath: string, io: InitIO): Record<string, unknown> | null {
+  let text: string;
+  try {
+    text = readFileSync(configPath, 'utf8');
+  } catch (error) {
+    io.say(`Cannot read the existing config ${configPath} (${(error as NodeJS.ErrnoException).code ?? 'error'}), so its settings could not be kept. Nothing was asked.`);
+    return null;
+  }
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text);
+  } catch {
+    raw = undefined;
+  }
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+    io.say(`The config at ${configPath} is not valid JSON: starting a new one (a storage/ folder next to it is kept).`);
+    return {};
+  }
+  const { printers: _replaced, ...rest } = raw as Record<string, unknown>;
+  return rest;
+}
+
 async function required(io: InitIO, question: string, hidden = false): Promise<string> {
   for (let attempt = 0; attempt < TRIES; attempt++) {
     const answer = (await io.ask(question, hidden)).trim();
@@ -79,11 +107,14 @@ async function required(io: InitIO, question: string, hidden = false): Promise<s
 export async function init(options: InitOptions, io: InitIO): Promise<number> {
   const { configPath } = options;
   const dir = dirname(configPath);
-  if (existsSync(configPath) && !options.force) {
+  const exists = existsSync(configPath);
+  if (exists && !options.force) {
     io.say(`There is already a config at ${configPath}.`);
-    io.say('Your Home pairing lives next to it, so init leaves it alone. Edit the file, or run init --force to rewrite it (the pairing in storage/ is kept).');
+    io.say('Your Home pairing lives next to it, so init leaves it alone. Edit the file, or run init --force to set up the printer again (the rest of the config and the pairing are kept).');
     return 1;
   }
+  const kept = exists ? keptSettings(configPath, io) : {};
+  if (kept === null) return 1;
   // Find out now, not after the questions, whether the files can be written
   // (a container user facing a root-owned mount, say).
   try {
@@ -114,7 +145,7 @@ export async function init(options: InitOptions, io: InitIO): Promise<number> {
   if (camera) printer['camera'] = { source: camera };
   // Check with the real parser before writing anything; an inline code stands in for the file.
   try {
-    parseConfig({ printers: [{ ...printer, accessCode: code }] }, dir);
+    parseConfig({ ...kept, printers: [{ ...printer, accessCode: code }] }, dir);
   } catch (error) {
     if (!(error instanceof ConfigError)) throw error;
     io.say(`That does not work as a config: ${error.message}. Nothing was written.`);
@@ -124,7 +155,7 @@ export async function init(options: InitOptions, io: InitIO): Promise<number> {
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   const codeFile = join(dir, ACCESS_CODE_FILE);
   writePrivate(codeFile, `${code}\n`);
-  writePrivate(configPath, `${JSON.stringify({ printers: [{ ...printer, accessCodeFile: ACCESS_CODE_FILE }] }, null, 2)}\n`);
+  writePrivate(configPath, `${JSON.stringify({ printers: [{ ...printer, accessCodeFile: ACCESS_CODE_FILE }], ...kept }, null, 2)}\n`);
   io.say(`Wrote ${configPath} and ${codeFile} (readable only by you).`);
 
   const result = await io.probe(configPath);
