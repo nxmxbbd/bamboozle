@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
-import { readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { basename, dirname, join } from 'node:path';
+import { readdirSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { basename, dirname, join, resolve } from 'node:path';
 import { AccessoryInfo, HAPStorage } from 'hap-nodejs';
 
 // HAP-NodeJS keeps the pairing state in storage/hap, one JSON file per key and
@@ -17,6 +17,9 @@ import { AccessoryInfo, HAPStorage } from 'hap-nodejs';
 // are not written at all, and a file that is there but unreadable stops the
 // bridge instead of being replaced.
 
+/** The files HAP-NodeJS 0.14 keeps per bridge, as <kind>.<id>.json. */
+const PAIRING_FILE_KINDS = ['AccessoryInfo', 'IdentifierCache', 'ControllerStorage'] as const;
+
 /** What node-persist 0.0.x (HAP-NodeJS's storage) looks like from the inside. */
 interface NodePersist {
   options: { dir: string; ttl?: unknown; stringify: (value: unknown) => string };
@@ -28,18 +31,28 @@ function code(error: unknown): string | undefined {
   return (error as NodeJS.ErrnoException).code;
 }
 
-/**
- * Write a file so that it is either the old or the new content, never a half
- * of either. A symbolic link is written through: its target is replaced and
- * the link stays.
- */
-export function writeAtomically(file: string, text: string): void {
-  let target = file;
+/** Where a write to `file` lands: the file a link points to (even one not created yet), else the file. */
+function destination(file: string): string {
   try {
-    target = realpathSync(file);
+    return realpathSync(file);
   } catch (error) {
     if (code(error) !== 'ENOENT') throw error;
   }
+  try {
+    return resolve(dirname(file), readlinkSync(file)); // a link to a file that does not exist yet
+  } catch (error) {
+    if (code(error) === 'ENOENT' || code(error) === 'EINVAL') return file; // missing, or not a link
+    throw error;
+  }
+}
+
+/**
+ * Write a file so that it is either the old or the new content, never a half
+ * of either. A symbolic link is written through: its target is replaced (or
+ * created) and the link stays.
+ */
+export function writeAtomically(file: string, text: string): void {
+  const target = destination(file);
   // A dot name: node-persist skips dot files when it loads the directory.
   // Unique and created exclusively: another process saving to the same
   // storage cannot empty it before it is renamed into place. A crash between
@@ -50,7 +63,8 @@ export function writeAtomically(file: string, text: string): void {
     writeFileSync(temporary, text, { mode: 0o600, flag: 'wx', flush: true });
     renameSync(temporary, target);
   } catch (error) {
-    rmSync(temporary, { force: true });
+    // EEXIST: the name was taken, so the file is someone else's to remove.
+    if (code(error) !== 'EEXIST') rmSync(temporary, { force: true });
     throw error;
   }
 }
@@ -119,9 +133,10 @@ export function checkPairingFiles(hapDir: string, username: string): void {
     throw error;
   }
   const keysFile = AccessoryInfo.persistKey(username);
-  const ours = keysFile.slice(keysFile.indexOf('.')); // ".<id>.json"
+  const id = keysFile.slice(keysFile.indexOf('.')); // ".<id>.json"
+  const ours = new Set(PAIRING_FILE_KINDS.map((kind) => `${kind}${id}`));
   for (const name of names) {
-    if (name.startsWith('.') || !name.endsWith(ours)) continue;
+    if (!ours.has(name)) continue;
     const file = join(hapDir, name);
     const stats = statSync(file, { throwIfNoEntry: false }); // follows links
     let found: string | null;

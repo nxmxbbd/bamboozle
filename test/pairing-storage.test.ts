@@ -85,6 +85,8 @@ test('pairing files: only this bridge\'s files are checked, and only its Accesso
   checkPairingFiles(hapDir({ 'IdentifierCache.0E1122334457.json': '{"cache":{}}' }), USERNAME);
   // Another bridge's damaged file, and something that is not HAP-NodeJS's at all.
   checkPairingFiles(hapDir({ [KEYS]: GOOD_KEYS, 'IdentifierCache.0E0000000001.json': '', 'notes.txt': 'not json' }), USERNAME);
+  // A renamed copy is not HAP-NodeJS's file, even with the same ending.
+  checkPairingFiles(hapDir({ [KEYS]: GOOD_KEYS, [`backup.${KEYS}`]: '', 'old-IdentifierCache.0E1122334457.json': '{' }), USERNAME);
 });
 
 test('pairing files: links are followed', () => {
@@ -183,4 +185,36 @@ test('writeAtomically: each write has its own temporary file, created exclusivel
     assert.equal(flag, 'wx', file);
   }
   assert.deepEqual(readdirSync(folder), ['file.json']);
+});
+
+test('writeAtomically: a link to a file that does not exist yet creates the file and keeps the link', () => {
+  const folder = join(dir, 'atomic-dangling');
+  mkdirSync(folder);
+  symlinkSync('real.json', join(folder, 'link.json'));
+  writeAtomically(join(folder, 'link.json'), 'created');
+  assert.ok(lstatSync(join(folder, 'link.json')).isSymbolicLink());
+  assert.equal(readFileSync(join(folder, 'real.json'), 'utf8'), 'created');
+});
+
+test('writeAtomically: a temporary name that is taken is left to its owner', () => {
+  const folder = join(dir, 'atomic-taken');
+  mkdirSync(folder);
+  const write = fs.writeFileSync;
+  let taken = '';
+  mock.method(fs, 'writeFileSync', (file: fs.PathOrFileDescriptor, data: unknown, options?: fs.WriteFileOptions) => {
+    if (typeof file === 'string' && file.endsWith('.tmp')) {
+      taken = file;
+      write(file, 'another writer'); // got there first
+      throw Object.assign(new Error(`EEXIST: file already exists, open '${file}'`), { code: 'EEXIST' });
+    }
+    return write(file, data as string, options);
+  });
+  syncBuiltinESMExports();
+  try {
+    assert.throws(() => writeAtomically(join(folder, 'file.json'), 'mine'), /EEXIST/);
+  } finally {
+    mock.restoreAll();
+    syncBuiltinESMExports();
+  }
+  assert.equal(readFileSync(taken, 'utf8'), 'another writer');
 });
