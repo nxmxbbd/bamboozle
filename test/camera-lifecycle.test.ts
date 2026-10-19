@@ -711,3 +711,21 @@ test('a refresh streak is counted per size: another size that works neither rese
   rmSync(flag);
   await cam.stop();
 });
+
+test('refresh streaks are kept only for sizes still in the snapshot cache', async () => {
+  const flag = join(dir, 'flaky-all.flag');
+  process.env['BZ_FLAKY_FLAG'] = flag;
+  const log = { log: () => {}, warn: () => {} };
+  const cam = camera({ ffmpeg: { path: flaky, encoder: 'libx264', vaapiDevice: '/dev/dri/renderD128' }, log, snapshotFreshMs: 0 });
+  for (let i = 0; i < SNAPSHOT_CACHE_SIZES + 4; i++) {
+    const [w, h] = [320 + i * 16, 180 + i * 9];
+    await snapshot(cam, w, h); // renders and caches this size
+    writeFileSync(flag, '');
+    await delay(5);
+    await snapshot(cam, w, h); // served from the cache; its refresh fails
+    await delay(150);
+    rmSync(flag);
+  }
+  assert.ok(cam.refreshStreakSizes <= SNAPSHOT_CACHE_SIZES, `${cam.refreshStreakSizes} streaks kept`);
+  await cam.stop();
+});

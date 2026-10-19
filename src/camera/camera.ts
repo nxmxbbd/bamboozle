@@ -228,6 +228,10 @@ export class PrinterCamera implements CameraStreamingDelegate {
     return this.#snapshots.size;
   }
 
+  get refreshStreakSizes(): number {
+    return this.#refreshFailures.size;
+  }
+
   /** Push the latest printer state into the overlay (snapshots and live video). */
   update(input: OverlayInput): void {
     this.#files.write(overlayContent(input));
@@ -280,7 +284,11 @@ export class PrinterCamera implements CameraStreamingDelegate {
       .then((image) => {
         this.#snapshots.delete(key);
         this.#snapshots.set(key, { image, at: Date.now() });
-        while (this.#snapshots.size > SNAPSHOT_CACHE_SIZES) this.#snapshots.delete(this.#snapshots.keys().next().value as string);
+        while (this.#snapshots.size > SNAPSHOT_CACHE_SIZES) {
+          const oldest = this.#snapshots.keys().next().value as string;
+          this.#snapshots.delete(oldest);
+          this.#refreshFailures.delete(oldest); // a streak lives as long as its image
+        }
         return image;
       })
       .finally(() => {
@@ -301,7 +309,9 @@ export class PrinterCamera implements CameraStreamingDelegate {
   #refreshFailed(key: string, error: Error): void {
     if (this.#stopping) return;
     const failures = (this.#refreshFailures.get(key) ?? 0) + 1;
-    this.#refreshFailures.set(key, failures);
+    // Keep the streak only while the size is cached (it may have been evicted mid-refresh).
+    if (this.#snapshots.has(key)) this.#refreshFailures.set(key, failures);
+    else this.#refreshFailures.delete(key);
     if (failures !== 1 && failures % REFRESH_FAILURE_LOG_EVERY !== 0) return;
     const cached = this.#snapshots.get(key);
     const age = cached ? `, serving an image from ${Math.round((Date.now() - cached.at) / 1000)} s ago` : '';
