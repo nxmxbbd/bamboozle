@@ -1,8 +1,9 @@
-import { test, after } from 'node:test';
+import { test, after, mock } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import fs, { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { checkPairingFiles, writeAtomically } from '../src/homekit/pairing-storage.ts';
 
 const dir = mkdtempSync(join(tmpdir(), 'bamboozle-pairing-'));
@@ -79,4 +80,32 @@ test('writeAtomically: a failed write keeps the old content and cleans up', () =
   assert.throws(() => writeAtomically(join(folder, 'target'), 'new'));
   assert.deepEqual(readdirSync(folder), ['target']);
   assert.equal(readFileSync(join(folder, 'target', 'inside'), 'utf8'), 'keep');
+});
+
+test('writeAtomically: each write has its own temporary file, created exclusively', () => {
+  // Two processes saving to the same storage must not share a temporary file:
+  // one could empty it just before the other renames it into place.
+  const folder = join(dir, 'atomic-own');
+  mkdirSync(folder);
+  const write = fs.writeFileSync;
+  const seen: Array<{ file: string; flag: unknown }> = [];
+  mock.method(fs, 'writeFileSync', (file: fs.PathOrFileDescriptor, data: unknown, options?: fs.WriteFileOptions) => {
+    seen.push({ file: String(file), flag: typeof options === 'object' && options !== null ? options.flag : undefined });
+    return write(file, data as string, options);
+  });
+  syncBuiltinESMExports();
+  try {
+    writeAtomically(join(folder, 'file.json'), 'one');
+    writeAtomically(join(folder, 'file.json'), 'two');
+  } finally {
+    mock.restoreAll();
+    syncBuiltinESMExports();
+  }
+  assert.equal(seen.length, 2);
+  assert.notEqual(seen[0]?.file, seen[1]?.file);
+  for (const { file, flag } of seen) {
+    assert.ok(basename(file).startsWith('.file.json.'), file);
+    assert.equal(flag, 'wx', file);
+  }
+  assert.deepEqual(readdirSync(folder), ['file.json']);
 });

@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { AccessoryInfo, HAPStorage } from 'hap-nodejs';
@@ -25,9 +26,13 @@ interface NodePersist {
 /** Write a file so that it is either the old or the new content, never a half of either. */
 export function writeAtomically(file: string, text: string): void {
   // A dot name: node-persist skips dot files when it loads the directory.
-  const temporary = join(dirname(file), `.${basename(file)}.tmp`);
+  // Unique and created exclusively: another process saving to the same
+  // storage cannot empty it before it is renamed into place. A crash between
+  // write and rename leaves one such file behind; it is not swept up at start,
+  // because that could delete another process's file mid-save.
+  const temporary = join(dirname(file), `.${basename(file)}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`);
   try {
-    writeFileSync(temporary, text, { mode: 0o600, flush: true });
+    writeFileSync(temporary, text, { mode: 0o600, flag: 'wx', flush: true });
     renameSync(temporary, file);
   } catch (error) {
     rmSync(temporary, { force: true });
