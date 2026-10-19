@@ -42,7 +42,7 @@ async function runServe(configPath: string, simulate: boolean): Promise<number> 
   console.log(`config ${configPath}`);
   const config = loadConfig(configPath);
   // Not a refusal (it may have run like this for years), but loud.
-  const open = new Set([dirname(resolve(configPath)), config.storagePath].map(openToEveryone).filter((dir) => dir !== null));
+  const open = new Set([dirname(resolve(configPath)), config.storagePath].map((dir) => openToEveryone(dir)).filter((dir) => dir !== null));
   for (const dir of open) {
     console.warn(`warning: ${dir} is writable by every user on this machine, so anyone could swap the config or the pairing keys (chmod o-w it)`);
   }

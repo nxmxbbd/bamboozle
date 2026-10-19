@@ -31,13 +31,17 @@ export function resolveConfigPath(flag: string | undefined, env: Env = process.e
 }
 
 /**
- * The first directory at or above `path` that any user may write to without
- * the sticky bit (which /tmp has): anyone could swap out whatever lies below
- * it, config and pairing keys included. Paths that do not exist yet are
- * judged by what exists above them. null when there is none.
+ * The first directory at or above `path` that other users could use to
+ * swap what lies below it (config, access code, pairing keys), or null.
+ * The nearest existing one is where things are still to be created, so any
+ * write access for everyone counts there: the sticky bit only protects names
+ * that already exist. Further up, a sticky directory such as /tmp is fine.
+ * Windows reports every directory as writable, so it is not checked there.
  */
-export function openToEveryone(path: string): string | null {
+export function openToEveryone(path: string, platform: NodeJS.Platform = process.platform): string | null {
+  if (platform === 'win32') return null;
   let current = resolve(path);
+  let nearest = true;
   for (;;) {
     let mode: number | undefined;
     try {
@@ -45,7 +49,10 @@ export function openToEveryone(path: string): string | null {
     } catch {
       // not there (yet)
     }
-    if (mode !== undefined && mode & 0o002 && !(mode & 0o1000)) return current;
+    if (mode !== undefined) {
+      if (mode & 0o002 && (nearest || !(mode & 0o1000))) return current;
+      nearest = false;
+    }
     const up = dirname(current);
     if (up === current) return null;
     current = up;

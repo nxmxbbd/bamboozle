@@ -105,7 +105,7 @@ test('init stops before asking when the config directory is a dangling symlink',
   assert.ok(said.some((l) => l.startsWith('Cannot write to')), said.join('\n'));
 });
 
-test('init refuses a config directory every user can write to, unless it is sticky', async () => {
+test('init refuses a config directory every user can write to, sticky or not', async () => {
   const run = async (mode: number) => {
     const opts = options();
     const configDir = join(opts.configPath, '..');
@@ -118,7 +118,7 @@ test('init refuses a config directory every user can write to, unless it is stic
   assert.equal(open.code, 1);
   assert.deepEqual(open.asked, [], 'nothing was asked');
   assert.ok(open.said.some((l) => l.includes('writable by every user')), open.said.join('\n'));
-  assert.equal((await run(0o1777)).code, 0, 'sticky, like /tmp: others cannot replace our files');
+  assert.equal((await run(0o1777)).code, 1, 'sticky only protects names that exist: others could create storage/ first');
   assert.equal((await run(0o775)).code, 0, 'group-writable, as mkdir makes it under a 002 umask');
 });
 

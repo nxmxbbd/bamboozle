@@ -27,7 +27,7 @@ test('degenerate inputs: empty flag refused, blank env ignored, relative XDG ign
   assert.equal(defaultConfigPath({ XDG_CONFIG_HOME: '/xdg' }, () => ''), '/xdg/bamboozle/config.json');
 });
 
-test('openToEveryone finds a directory on the way up that any user may write to, unless it is sticky', () => {
+test('openToEveryone finds a directory on the way up that others could use to swap what is below', () => {
   const base = mkdtempSync(join(tmpdir(), 'bamboozle-paths-')); // 0700, under a sticky /tmp
   after(() => rmSync(base, { recursive: true, force: true }));
   const open = join(base, 'open');
@@ -39,7 +39,9 @@ test('openToEveryone finds a directory on the way up that any user may write to,
   assert.equal(openToEveryone(inner), open, 'a private directory inside an open one can be swapped out');
   assert.equal(openToEveryone(join(inner, 'not', 'there', 'yet')), open, 'a path to be created is judged by what exists');
   chmodSync(open, 0o1777);
-  assert.equal(openToEveryone(inner), null, 'sticky, like /tmp');
+  assert.equal(openToEveryone(inner), null, 'sticky above an existing directory, like /tmp: fine');
+  assert.equal(openToEveryone(join(open, 'not-yet')), open, 'but not where something is still to be created: sticky does not stop others creating that name first');
+  assert.equal(openToEveryone(join(open, 'not-yet'), 'win32'), null, 'Windows reports every directory as writable: no check');
   chmodSync(open, 0o775);
   assert.equal(openToEveryone(inner), null, 'group-writable is allowed (umask 002)');
 });
