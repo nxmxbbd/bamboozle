@@ -188,3 +188,18 @@ test('ffmpeg renders the overlay, and different states render differently', { sk
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// The Home app draws the snapshot age ("now", "6s") over the bottom-left
+// corner of a camera tile. Measured on a full-width iPhone tile and mapped to
+// the 1280x720 canvas, it covers about x 34-123, y 642-678.
+const HOME_LABEL_ZONE = { right: 135, top: 640 };
+
+test('nothing left-aligned sits where the Home app puts its snapshot age', () => {
+  const blocked = LAYERS.filter((layer) => {
+    const x = Number(layer.x);
+    const y = Number(layer.y);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return false; // right-aligned or computed
+    return x < HOME_LABEL_ZONE.right && y + layer.size > HOME_LABEL_ZONE.top;
+  });
+  assert.deepEqual(blocked.map((layer) => layer.file), []);
+});

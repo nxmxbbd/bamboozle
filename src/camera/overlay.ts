@@ -52,11 +52,16 @@ const DETAIL_SIZE = 22;
 // blocks do not leave anti-aliased seams.
 const BAR_SIZE = 13;
 
+// The Home app draws the snapshot age ("now", "6s") over the bottom-left
+// corner of a camera tile, so the whole bottom block sits this much higher
+// and leaves that corner to the Home app.
+const HOME_LABEL_CLEARANCE = 48;
+
 // Baselines, measured from the bottom edge.
-const BIG_BASELINE = CANVAS.height - 104;
+const BIG_BASELINE = CANVAS.height - 104 - HOME_LABEL_CLEARANCE;
 const CAPTION_BASELINE = BIG_BASELINE - VALUE_SIZE - 12;
-const DETAIL_BASELINE = CANVAS.height - MARGIN;
-const BAR_TOP = CANVAS.height - 86;
+const DETAIL_BASELINE = CANVAS.height - MARGIN - HOME_LABEL_CLEARANCE;
+const BAR_TOP = CANVAS.height - 86 - HOME_LABEL_CLEARANCE;
 
 const top = (baseline: number, size: number) => String(Math.round(baseline - ASCENT * size));
 
