@@ -2,7 +2,7 @@
 
 Your Bambu Lab printer, in Apple Home. No cloud, no Home Assistant, no Homebridge. Just one small process on your network, telling HomeKit a few white lies.
 
-> **Status:** early, read-only. Tested with an H2C. Other models (X1, P1, A1) send the same report format and should work, but are untested.
+> **Status:** early, and look-but-don't-touch: bamboozle shows your printer in Home but doesn't control it ([no controls yet](#no-controls-yet)). Tested with an H2C. Other models (X1, P1, A1) send the same report format and should work, but are untested.
 
 ## The lies
 
@@ -45,7 +45,7 @@ There are no controls yet. Chamber light and pause/resume are planned, only for 
 The accomplice kit:
 
 - The printer's **IP address** and **LAN access code**, both on its screen in the network / LAN settings (plus the **serial number** if you write the config by hand). bamboozle connects to the printer's MQTT port (8883).
-- **Developer Mode is not needed.** Read-only status works with the printer in cloud mode, in LAN-only mode, with or without Developer Mode. (Future controls will need it.)
+- **Developer Mode is not needed.** Showing the status works with the printer in cloud mode, in LAN-only mode, with or without Developer Mode. (Future controls will need it.)
 - Either **Docker** with Compose, which brings everything else along, or:
   - **Node.js 22.18** or newer.
   - For the camera: **ffmpeg** (with `libx264`, or an Intel/AMD GPU with VAAPI for hardware encoding), the **Hermit** font (`fonts-hermit` on Debian/Ubuntu) and **fontconfig**.
