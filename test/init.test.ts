@@ -1,7 +1,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer, type Server } from 'node:tls';
@@ -79,6 +79,16 @@ test('init stops before asking anything when it cannot write the config director
   assert.equal(await init(options({ configPath: join(blocker, 'bamboozle', 'config.json') }), io), 1);
   assert.deepEqual(asked, [], 'nothing was asked');
   assert.ok(said.some((l) => l.includes(join(blocker, 'bamboozle')) && l.includes('ENOTDIR')), said.join('\n'));
+});
+
+test('init stops before asking when the config directory is a dangling symlink', async () => {
+  const base = join(dir, `dangling-${++n}`);
+  mkdirSync(base);
+  symlinkSync(join(base, 'gone'), join(base, 'bamboozle'));
+  const { io, said, asked } = fakeIO(['192.0.2.10', '12345678', '', '']);
+  assert.equal(await init(options({ configPath: join(base, 'bamboozle', 'config.json') }), io), 1);
+  assert.deepEqual(asked, [], 'nothing was asked');
+  assert.ok(said.some((l) => l.startsWith('Cannot write to')), said.join('\n'));
 });
 
 test('init refuses a config directory every user can write to, unless it is sticky', async () => {

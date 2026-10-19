@@ -1,4 +1,4 @@
-import { accessSync, chmodSync, constants, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { accessSync, chmodSync, constants, existsSync, lstatSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { ConfigError, parseConfig } from './config.ts';
@@ -57,8 +57,18 @@ function writePrivate(path: string, content: string): void {
  * must be a directory this process can write.
  */
 function assertWritable(dir: string): void {
+  // lstat, so a dangling or looping symlink counts as there: following it
+  // (stat below) then fails with its real error instead of walking past it.
+  const there = (path: string) => {
+    try {
+      lstatSync(path);
+      return true;
+    } catch {
+      return false;
+    }
+  };
   let existing = dir;
-  while (!existsSync(existing) && dirname(existing) !== existing) existing = dirname(existing);
+  while (!there(existing) && dirname(existing) !== existing) existing = dirname(existing);
   if (!statSync(existing).isDirectory()) throw Object.assign(new Error(`${existing} is not a directory`), { code: 'ENOTDIR' });
   accessSync(existing, constants.W_OK);
 }
