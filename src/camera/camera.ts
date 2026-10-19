@@ -174,7 +174,8 @@ export class PrinterCamera implements CameraStreamingDelegate {
   readonly #preparedTtlMs: number;
   readonly #freshMs: number;
   /** Background snapshot refreshes that failed in a row. */
-  #refreshFailures = 0;
+  /** Failed background refreshes in a row, per snapshot size. */
+  #refreshFailures = new Map<string, number>();
   readonly #streams = new Map<string, Stream>();
   readonly #snapshots = new Map<string, CachedSnapshot>();
   readonly #rendering = new Map<string, Promise<Buffer>>();
@@ -248,7 +249,7 @@ export class PrinterCamera implements CameraStreamingDelegate {
       // Only the request that starts a refresh reports on it, so one failure counts once.
       if (Date.now() - cached.at > this.#freshMs && !this.#rendering.has(key)) {
         this.#render(width, height).then(
-          () => this.#refreshed(),
+          () => this.#refreshed(key),
           (error: Error) => this.#refreshFailed(key, error),
         );
       }
@@ -256,7 +257,7 @@ export class PrinterCamera implements CameraStreamingDelegate {
     }
     this.#render(width, height).then(
       (image) => {
-        this.#refreshed();
+        this.#refreshed(key);
         callback(undefined, image);
       },
       (error: Error) => {
@@ -294,22 +295,25 @@ export class PrinterCamera implements CameraStreamingDelegate {
   /**
    * A background refresh failed. The Home app keeps the last good image, so
    * nothing looks broken there: say so in the log, on the first failure of a
-   * streak and then every REFRESH_FAILURE_LOG_EVERY failures.
+   * streak and then every REFRESH_FAILURE_LOG_EVERY failures. Streaks are
+   * per size, so a size that works does not interrupt one that keeps failing.
    */
   #refreshFailed(key: string, error: Error): void {
     if (this.#stopping) return;
-    this.#refreshFailures++;
-    if (this.#refreshFailures !== 1 && this.#refreshFailures % REFRESH_FAILURE_LOG_EVERY !== 0) return;
+    const failures = (this.#refreshFailures.get(key) ?? 0) + 1;
+    this.#refreshFailures.set(key, failures);
+    if (failures !== 1 && failures % REFRESH_FAILURE_LOG_EVERY !== 0) return;
     const cached = this.#snapshots.get(key);
     const age = cached ? `, serving an image from ${Math.round((Date.now() - cached.at) / 1000)} s ago` : '';
-    this.#options.log?.warn(`[${this.#options.name}] snapshot refresh failed (${this.#refreshFailures}x): ${error.message}${age}`);
+    this.#options.log?.warn(`[${this.#options.name}] ${key} snapshot refresh failed (${failures}x): ${error.message}${age}`);
   }
 
-  /** A snapshot rendered: end a streak of failed refreshes, if there was one. */
-  #refreshed(): void {
-    if (this.#refreshFailures === 0) return;
-    this.#options.log?.log(`[${this.#options.name}] snapshots refresh again after ${this.#refreshFailures} failed attempt(s)`);
-    this.#refreshFailures = 0;
+  /** A snapshot of this size rendered: end its streak of failed refreshes, if there was one. */
+  #refreshed(key: string): void {
+    const failures = this.#refreshFailures.get(key);
+    if (failures === undefined) return;
+    this.#refreshFailures.delete(key);
+    this.#options.log?.log(`[${this.#options.name}] ${key} snapshots refresh again after ${failures} failed attempt(s)`);
   }
 
   // --- live video --------------------------------------------------------------

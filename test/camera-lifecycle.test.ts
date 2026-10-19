@@ -682,3 +682,32 @@ test('a failing background snapshot refresh is logged, and so is the recovery', 
   assert.ok(lines.some((l) => /^log .*snapshots refresh again after 1 failed attempt/.test(l)), lines.join('\n'));
   await cam.stop();
 });
+
+// A fake ffmpeg whose 640x360 renders fail while a flag file exists.
+const flaky640 = join(dir, 'flaky640-ffmpeg.sh');
+writeFileSync(flaky640, '#!/bin/sh\ncase "$*" in *scale=640:360*) if [ -e "$BZ_FLAKY640_FLAG" ]; then echo "simulated 640 failure" >&2; exit 1; fi;; esac\nprintf "\\377\\330\\377\\331"\n');
+chmodSync(flaky640, 0o755);
+
+test('a refresh streak is counted per size: another size that works neither resets nor re-logs it', async () => {
+  const flag = join(dir, 'flaky640.flag');
+  process.env['BZ_FLAKY640_FLAG'] = flag;
+  const lines: string[] = [];
+  const log = { log: (m: string) => void lines.push(`log ${m}`), warn: (m: string) => void lines.push(`warn ${m}`) };
+  const cam = camera({ ffmpeg: { path: flaky640, encoder: 'libx264', vaapiDevice: '/dev/dri/renderD128' }, log, snapshotFreshMs: 0 });
+  await snapshot(cam, 640, 360);
+  await snapshot(cam, 320, 180);
+  writeFileSync(flag, '');
+  for (let i = 0; i < 4; i++) {
+    for (const [w, h] of [[640, 360], [320, 180]] as const) {
+      await delay(5);
+      await snapshot(cam, w, h);
+      await delay(150); // let the background refresh finish
+    }
+  }
+  const warns = lines.filter((l) => l.startsWith('warn'));
+  assert.equal(warns.length, 1, lines.join('\n'));
+  assert.match(warns[0] ?? '', /640x360/);
+  assert.ok(!lines.some((l) => l.includes('refresh again')), lines.join('\n'));
+  rmSync(flag);
+  await cam.stop();
+});
