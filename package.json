@@ -1,7 +1,6 @@
 {
   "name": "@nxmxbbd/bamboozle",
   "version": "0.1.0",
-  "private": true,
   "description": "LAN-only Apple Home bridge for Bambu Lab 3D printers. No cloud, no Home Assistant, no Homebridge.",
   "license": "MIT",
   "repository": {
