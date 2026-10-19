@@ -1,8 +1,9 @@
 # bamboozle, plus go2rtc to relay the printer's camera.
 #
+#   mkdir data                               # once, next to this file
 #   docker compose run --rm bamboozle init   # once: printer address and access code
 #   docker compose up -d
-#   docker compose logs bamboozle            # the pairing QR code
+#   docker compose logs -f bamboozle         # the pairing QR code
 #
 # Both use the host network: the Home app finds the bridge with mDNS, and
 # live video goes over UDP to whatever port the viewer picks.
@@ -13,8 +14,9 @@ services:
     restart: unless-stopped
     environment:
       TZ: Etc/UTC # your time zone, for the finish time on the camera overlay
+    # The image runs as uid 1000: ./data must be writable for it (see the README).
     volumes:
-      - data:/data # config, access code and the bridge's pairing keys
+      - ./data:/data # config, access code and the bridge's pairing keys
     # Hardware encoding on an Intel GPU ("camera": { "encoder": "vaapi" }):
     # pass the GPU in, plus the group that owns it.
     # devices:
@@ -28,6 +30,3 @@ services:
     restart: unless-stopped
     volumes:
       - ./go2rtc.yaml:/config/go2rtc.yaml:ro
-
-volumes:
-  data:

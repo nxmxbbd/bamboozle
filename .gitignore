@@ -8,6 +8,9 @@ storage/
 config.json
 *.local.json
 
+# Docker's data folder next to compose.yaml: config, access code, pairing keys.
+data/
+
 # Raw printer reports: run scripts/sanitize-report.ts before committing one.
 *.raw.json
 

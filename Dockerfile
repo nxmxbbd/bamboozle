@@ -28,8 +28,10 @@ RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force
 COPY --from=build /src/dist ./dist
 
 # Config, access code and pairing keys live in /data: mount a volume there.
+# XDG_CACHE_HOME gives fontconfig a writable cache under any uid (user:).
 RUN mkdir -m 700 /data && chown node:node /data
 ENV NODE_ENV=production \
+    XDG_CACHE_HOME=/tmp \
     BAMBOOZLE_CONFIG=/data/config.json \
     BAMBOOZLE_SERVE_HINT="docker compose up -d && docker compose logs -f bamboozle"
 USER node
