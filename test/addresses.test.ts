@@ -6,10 +6,12 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { IPV4 } from '../scripts/sanitize-report.ts';
 
 const root = new URL('../', import.meta.url);
+const rootPath = fileURLToPath(root);
 
 // Deliberate non-documentation inputs: the sanitizer tests and this file feed
 // these in to prove they get flagged or replaced.
@@ -27,8 +29,9 @@ const allowed = (ip: string) =>
 
 /** Every file a push would publish: the tracked ones and new ones git does not ignore. */
 function files(): string[] {
-  const list = execFileSync('git', ['ls-files', '--cached', '--others', '--exclude-standard', '-z'], { cwd: fileURLToPath(root), encoding: 'utf8' });
-  return list.split('\0').filter((name) => name !== '' && existsSync(new URL(name, root)));
+  const list = execFileSync('git', ['ls-files', '--cached', '--others', '--exclude-standard', '-z'], { cwd: rootPath, encoding: 'utf8' });
+  // join, not new URL(): a URL would cut a name at '#' or '?' and drop it silently.
+  return list.split('\0').filter((name) => name !== '' && existsSync(join(rootPath, name)));
 }
 
 /** Git's own test: a NUL byte near the start means binary. */
@@ -42,7 +45,7 @@ test('hand-written files use only loopback or documentation IPv4 addresses', () 
   }
   const found: string[] = [];
   for (const file of list) {
-    const bytes = readFileSync(new URL(file, root));
+    const bytes = readFileSync(join(rootPath, file));
     if (isBinary(bytes)) continue;
     for (const match of bytes.toString('utf8').matchAll(IPV4)) {
       if (!allowed(match[0]) && !EXEMPT[file]?.includes(match[0])) found.push(`${file}: ${match[0]}`);
@@ -57,6 +60,13 @@ test('the address check knows a real address from a documentation one', () => {
   assert.equal(allowed('10.0.0.1'), false);
   assert.equal(allowed('192.0.20.1'), false);
   assert.equal(allowed('198.51.10.1'), false);
+});
+
+test('the address pattern finds an address wherever prose puts it, and nothing longer', () => {
+  const found = (text: string) => [...text.matchAll(IPV4)].map((m) => m[0]);
+  assert.deepEqual(found('Reach it at 192.0.2.20.'), ['192.0.2.20']);
+  assert.deepEqual(found('(198.51.100.1), "198.51.100.2"; 203.0.113.3:8883'), ['198.51.100.1', '198.51.100.2', '203.0.113.3']);
+  assert.deepEqual(found('firmware 1.2.3.4.5 and 01.02.03.04'), []);
 });
 
 test('files that hold the access code or the pairing keys are never published', () => {
