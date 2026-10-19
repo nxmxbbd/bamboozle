@@ -118,6 +118,8 @@ function parsePrinter(item: unknown, index: number, baseDir: string): PrinterCon
     serial: requireString(item['serial'], `${where}.serial`),
     accessCode: readAccessCode(item, where, baseDir),
   };
+  // The serial names files under storagePath (pins, overlay text).
+  if (!/^[A-Za-z0-9]+$/.test(printer.serial)) throw new ConfigError(`${where}.serial may contain only letters and digits`);
   if (item['model'] !== undefined) printer.model = requireString(item['model'], `${where}.model`);
   if (item['camera'] !== undefined) {
     if (!isRaw(item['camera'])) throw new ConfigError(`${where}.camera must be an object`);

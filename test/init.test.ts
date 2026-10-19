@@ -137,6 +137,19 @@ test('init --force replaces the printer and keeps the rest of the config, a cust
   assert.ok(!readFileSync(opts.configPath, 'utf8').includes('oldcode1'), 'the old inline code is gone');
 });
 
+test('a typed serial must look like one: init asks again, then gives up without writing', async () => {
+  const opts = options();
+  const again = fakeIO(['192.0.2.10', '12345678', '../../x', '01p00a000000001', '', ''], { serial: new Error('connection refused') });
+  assert.equal(await init(opts, again.io), 0);
+  assert.equal(loadConfig(opts.configPath).printers[0]?.serial, '01P00A000000001');
+  assert.equal(again.asked.filter((q) => q.startsWith('Printer serial')).length, 2);
+
+  const never = options();
+  const bad = fakeIO(['192.0.2.10', '12345678', 'x', 'a/b', 'nope nope'], { serial: new Error('connection refused') });
+  await assert.rejects(init(never, bad.io), /no serial/);
+  assert.equal(existsSync(never.configPath), false, 'nothing was written');
+});
+
 test('init --force leaves a config with several printers alone: it sets up only one', async () => {
   const opts = options();
   mkdirSync(join(opts.configPath, '..'), { recursive: true });

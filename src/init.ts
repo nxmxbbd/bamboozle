@@ -2,6 +2,7 @@ import { accessSync, chmodSync, constants, existsSync, mkdirSync, readFileSync, 
 import { dirname, join } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { ConfigError, parseConfig } from './config.ts';
+import { isPrinterSerial } from './printer/serial.ts';
 
 export interface InitOptions {
   configPath: string;
@@ -94,6 +95,16 @@ function keptSettings(configPath: string, io: InitIO): Record<string, unknown> |
   return rest;
 }
 
+/** A typed serial, checked like the one from the certificate: it ends up in file names. */
+async function askSerial(io: InitIO): Promise<string> {
+  for (let attempt = 0; attempt < TRIES; attempt++) {
+    const serial = (await required(io, 'Printer serial number (printer screen, device info): ')).toUpperCase();
+    if (isPrinterSerial(serial)) return serial;
+    if (attempt < TRIES - 1) io.say('A serial is 8 to 20 letters and digits.');
+  }
+  throw new Error('no serial: a serial is 8 to 20 letters and digits');
+}
+
 async function required(io: InitIO, question: string, hidden = false): Promise<string> {
   for (let attempt = 0; attempt < TRIES; attempt++) {
     const answer = (await io.ask(question, hidden)).trim();
@@ -145,7 +156,7 @@ export async function init(options: InitOptions, io: InitIO): Promise<number> {
     io.say(`Found the printer: serial ${serial}.`);
   } catch (error) {
     io.say(`Could not read the serial from the printer (${(error as Error).message}).`);
-    serial = (await required(io, 'Printer serial number (printer screen, device info): ')).toUpperCase();
+    serial = await askSerial(io);
   }
   const name = options.name?.trim() || (await io.ask(`Name in the Home app [${DEFAULT_NAME}]: `)).trim() || DEFAULT_NAME;
   const camera = options.camera !== undefined

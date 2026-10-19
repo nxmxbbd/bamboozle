@@ -3,6 +3,8 @@ import { connect } from 'node:tls';
 /** Bambu printer serials are upper-case letters and digits. */
 const SERIAL = /^[0-9A-Z]{8,20}$/;
 
+export const isPrinterSerial = (text: string): boolean => SERIAL.test(text);
+
 /**
  * Read a printer's serial number from its TLS certificate: Bambu printers
  * present a self-signed leaf whose common name is the serial. Only the

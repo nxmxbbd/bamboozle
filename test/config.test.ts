@@ -121,3 +121,11 @@ test('camera: credentials in the source URL are refused, other mistakes too', ()
     assert.ok(!(error as Error).message.includes('12345678'));
   }
 });
+
+test('a serial is letters and digits only: it names files under storagePath', () => {
+  const printer = { name: 'P', host: '192.0.2.10', accessCode: '12345678' };
+  for (const serial of ['../../escape', 'A/B', 'A B', 'A.B']) {
+    assert.throws(() => parseConfig({ printers: [{ ...printer, serial }] }, '/tmp'), /serial may contain only letters and digits/, serial);
+  }
+  assert.equal(parseConfig({ printers: [{ ...printer, serial: '01P00A000000001' }] }, '/tmp').printers[0]?.serial, '01P00A000000001');
+});
