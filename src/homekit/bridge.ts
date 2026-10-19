@@ -125,19 +125,35 @@ export async function startBridge(options: BridgeOptions, accessories: Accessory
   // process. The saved file is intact either way and every save writes the
   // whole state, so report it once and keep trying: a camera turned off while
   // the disk was full must not come back on at the next restart. Bridged
-  // accessories save through this one.
+  // accessories save (and queue their saves) through this one, so stop() can
+  // also save a change whose timer has not run yet.
   const storage = bridge.controllerStorage;
   const save = storage.save.bind(storage);
+  // enqueueSaveRequest is private in the typings, but called by property.
+  const queue = storage as unknown as { enqueueSaveRequest(timeout?: number): void };
+  const enqueue = queue.enqueueSaveRequest.bind(storage);
   const retryMs = options.cameraSettingsRetryMs ?? CAMERA_SETTINGS_RETRY_MS;
   let retry: NodeJS.Timeout | undefined;
   let failing = false;
+  let pending = false;
+  let stopped = false;
+  queue.enqueueSaveRequest = (timeout?: number) => {
+    pending = true;
+    enqueue(timeout);
+  };
   storage.save = () => {
+    pending = false;
     clearTimeout(retry);
     retry = undefined;
     try {
       save();
     } catch (error) {
-      if (!failing) options.log?.warn(`camera settings not saved: ${(error as Error).message}; trying again every ${retryMs / 1000} s`);
+      const message = (error as Error).message;
+      if (stopped) {
+        options.log?.warn(`camera settings not saved before stopping: ${message}; the last change is lost`);
+        return;
+      }
+      if (!failing) options.log?.warn(`camera settings not saved: ${message}; trying again every ${retryMs / 1000} s`);
       failing = true;
       retry = setTimeout(() => storage.save(), retryMs).unref();
       return;
@@ -177,9 +193,11 @@ export async function startBridge(options: BridgeOptions, accessories: Accessory
     isPaired: () => paired,
     onPairingChange: (listener) => listeners.push(listener),
     stop: async () => {
-      if (retry) storage.save(); // a last try for settings still unsaved
-      clearTimeout(retry);
-      await bridge.unpublish();
+      await bridge.unpublish(); // no more changes from here on
+      stopped = true;
+      // Save what is still queued or failed, rather than leave it to a timer
+      // that may never run.
+      if (pending || failing) storage.save();
     },
   };
 }

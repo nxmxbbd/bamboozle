@@ -260,3 +260,19 @@ test('a camera setting changed on a full disk is saved once there is space, with
   await client.setCharacteristics({ [id]: 1 });
   await until(() => saved() !== off, 'the camera turned on to be saved');
 });
+
+// Last: it stops the bridge.
+test('stopping right after a camera setting changes still saves it', async () => {
+  const camera = cameraAccessory();
+  const rtp = camera.services.find((s) => fullType(s.type) === CAMERA_STREAM_MANAGEMENT);
+  assert.ok(rtp, 'camera stream management');
+  const id = `${camera.aid}.${characteristic(rtp, Characteristic.Active.UUID).iid}`;
+  const file = join(storage, 'hap', `ControllerStorage.${bridge.identity.username.replaceAll(':', '')}.json`);
+  const before = readFileSync(file, 'utf8');
+  await client.setCharacteristics({ [id]: 0 }); // HAP-NodeJS would save it ~100 ms from now
+  await client.close();
+  const stopping = Date.now();
+  await bridge.stop();
+  const tookMs = Date.now() - stopping;
+  assert.notEqual(readFileSync(file, 'utf8'), before, `the camera turned off is saved by stop() (took ${tookMs} ms)`);
+});
