@@ -44,49 +44,79 @@ There are no controls yet. Chamber light and pause/resume are planned, only for 
 
 The accomplice kit:
 
-- **Node.js 22.18** or newer (TypeScript runs directly via type stripping).
-- The printer's **IP address**, **serial number** and **LAN access code** (all shown on the printer's screen). bamboozle connects to the printer's MQTT port (8883).
+- The printer's **IP address** and **LAN access code**, both on its screen in the network / LAN settings (plus the **serial number** if you write the config by hand). bamboozle connects to the printer's MQTT port (8883).
 - **Developer Mode is not needed.** Read-only status works with the printer in cloud mode, in LAN-only mode, with or without Developer Mode. (Future controls will need it.)
-- For the camera: **ffmpeg** (with `libx264`, or an Intel/AMD GPU with VAAPI for hardware encoding), the **Hermit** font (`fonts-hermit` on Debian/Ubuntu) and **fontconfig**.
+- Either **Docker** with Compose, which brings everything else along, or:
+  - **Node.js 22.18** or newer.
+  - For the camera: **ffmpeg** (with `libx264`, or an Intel/AMD GPU with VAAPI for hardware encoding), the **Hermit** font (`fonts-hermit` on Debian/Ubuntu) and **fontconfig**.
 
 That's it. No plugins, no Home Assistant, no Homebridge.
 
-<!-- DRAFT: pending implementation -->
-## Install (npm, coming soon)
+## Install
 
-The short version, once the package exists:
+Three ways in. Pick your favourite.
+
+### Docker Compose
+
+The batteries-included option: bamboozle plus a [go2rtc](https://github.com/AlexxIT/go2rtc) relay for the camera (more on why in [Camera](#camera)). Both run on the host network: HomeKit finds the bridge with mDNS, and live video goes over UDP straight to whoever is watching, so a NAT'd container network would only get in the way. Images exist for amd64 and arm64.
+
+Make a folder and grab the two files:
+
+```sh
+mkdir bamboozle && cd bamboozle
+curl -fsSLO https://raw.githubusercontent.com/nxmxbbd/bamboozle/main/docker/compose.yaml
+curl -fsSLO https://raw.githubusercontent.com/nxmxbbd/bamboozle/main/docker/go2rtc.yaml
+mkdir data
+```
+
+Put the printer's IP address and LAN access code into `go2rtc.yaml`, then keep it to yourself with `chmod 600 go2rtc.yaml`. In `compose.yaml`, set `TZ` to your time zone, or the camera overlay will announce finish times in UTC.
+
+Now introduce bamboozle to the printer:
+
+```sh
+docker compose run --rm bamboozle init
+```
+
+When it asks for the camera relay, the answer is `rtsp://127.0.0.1:8554/printer`. Then start everything and watch the log for the pairing QR code:
+
+```sh
+docker compose up -d
+docker compose logs -f bamboozle
+```
+
+Everything bamboozle knows lives in `data/`: the config, the access code and the pairing keys. Back it up, keep it when you upgrade (`docker compose pull && docker compose up -d`), and edit `data/config.json` to change settings (then `docker compose restart bamboozle`).
+
+A few details:
+
+- **Whose `data/` is it?** The container runs as uid 1000, the first user on most Linux machines. If `id -u` says something else, run the container as yourself: add `user: "1001:1001"` (your `id -u` and `id -g`) to the bamboozle service. If `data/` is not writable, `init` says so before asking anything.
+- **Hardware encoding (Intel GPU):** uncomment `devices` and `group_add` in `compose.yaml`, put in the id of the group that owns the GPU (`getent group render | cut -d: -f3`), and set `"camera": { "encoder": "vaapi" }` in `data/config.json`.
+- **Already running go2rtc?** The sidecar wants the same ports (1984 and 8554). Remove the go2rtc service and give `init` the RTSP URL of the one you have.
+
+### npm
 
 ```sh
 npm install -g @nxmxbbd/bamboozle
 ```
 
-Then let it set itself up:
+Then let it set itself up and start the bridge:
 
 ```sh
 bamboozle init
-```
-
-`init` asks for the printer IP and access code (the code is not echoed), reads the serial from the printer's TLS certificate, writes the config and an access-code file to `~/.config/bamboozle/`, and checks that the printer answers. One command, zero config files to hand-write.
-
-Then start the bridge:
-
-```sh
 bamboozle serve
 ```
 
-While it is not paired, `serve` shows a QR code in the terminal. Point the iPhone camera at it.
-<!-- /DRAFT -->
+While it is not paired, `serve` shows a QR code in the terminal. Point the iPhone camera at it. [Configure and pair](#configure-and-pair) has the details, and [Run it for real](#run-it-for-real) makes it permanent.
 
-## Install (from source)
+### From source
 
-For now, the old-fashioned way:
+For the old-fashioned:
 
 ```sh
 git clone https://github.com/nxmxbbd/bamboozle.git && cd bamboozle
 npm ci --omit=dev
 ```
 
-Two commands. You have survived worse. From a checkout, `node src/cli.ts` plays the part of the `bamboozle` command.
+Two commands. You have survived worse. From a checkout, `node src/cli.ts` plays the part of the `bamboozle` command (TypeScript runs directly via type stripping).
 
 ## Printer prep
 
@@ -101,6 +131,8 @@ The access code belongs in a file, not on a command line where your shell might 
 (That keeps the code out of your shell history. Opening `printer.code` in an editor works too: surrounding whitespace and the final newline are ignored. Then `chmod 600 printer.code`.)
 
 ## Camera
+
+(Docker Compose users: your relay is already running. This section explains what it does.)
 
 The printer's own camera stream is RTSPS on port 322, authenticated with the access code as a password. bamboozle refuses camera URLs that contain credentials (they would show up in ffmpeg's command line as process arguments), so the stream needs a middleman.
 
@@ -121,51 +153,24 @@ Then point bamboozle at the relay:
 
 A relay is good anyway: every Home app viewer shares the relay's one connection to the printer, so people can open and close the camera all day without the printer noticing. That matters, because whenever a direct RTSPS client disconnects, the printer's stream freezes for everyone else for about 10 seconds. Fewer direct clients, fewer hiccups.
 
-**go2rtc security note:** go2rtc's API endpoints (`/api/streams`, `/api/config`) will happily show the source URL, access code included. Bind the go2rtc API to localhost, or firewall it.
-
-<!-- DRAFT: pending implementation -->
-### Docker Compose (coming soon)
-
-A Docker Compose setup with bamboozle and a go2rtc sidecar, both on the host network (mDNS, HomeKit TCP and video UDP need it):
-
-```yaml
-services:
-  bamboozle:
-    image: ghcr.io/nxmxbbd/bamboozle
-    network_mode: host
-    volumes:
-      - ./config.json:/app/config.json:ro
-      - ./printer.code:/app/printer.code:ro
-      - bamboozle-storage:/app/storage
-    # Optional: VAAPI hardware encoding
-    # devices:
-    #   - /dev/dri:/dev/dri
-
-  go2rtc:
-    image: alexxit/go2rtc
-    network_mode: host
-    volumes:
-      - ./go2rtc.yaml:/config/go2rtc.yaml:ro
-
-volumes:
-  bamboozle-storage:
-```
-<!-- /DRAFT -->
+**go2rtc security note:** go2rtc's API endpoints (`/api/streams`, `/api/config`) will happily show the source URL, access code included. Bind the go2rtc API to localhost, or firewall it. The `go2rtc.yaml` in `docker/` does exactly that, keeps the RTSP server on localhost too, and turns off WebRTC, which would otherwise listen on every interface.
 
 ## Configure and pair
 
 Now to introduce them. The quick way:
 
 ```sh
-node src/cli.ts init
+bamboozle init
 ```
 
-It asks for the IP and the access code (typing the code shows nothing, on purpose), reads the serial from the printer's certificate, asks for a name and an optional camera relay URL, writes everything to `~/.config/bamboozle/` (readable only by you) and checks that the printer answers. It will not overwrite an existing config, because your Home pairing lives next to it; `init --force` rewrites the config and keeps the pairing.
+(In Docker that's `docker compose run --rm bamboozle init`; from a checkout, `node src/cli.ts init`.)
+
+It asks for the IP and the access code (typing the code shows nothing, on purpose), reads the serial from the printer's certificate, asks for a name and an optional camera relay URL, writes everything to `~/.config/bamboozle/` (`data/` in Docker; readable only by you) and checks that the printer answers. It will not overwrite an existing config, because your Home pairing lives next to it; `init --force` rewrites the config and keeps the pairing.
 
 Then start the bridge:
 
 ```sh
-node src/cli.ts serve
+bamboozle serve
 ```
 
 While the bridge is not paired, `serve` shows a QR code: point the iPhone camera at it. No camera handy? In the Home app choose **Add Accessory**, then **More options**, pick the bridge and enter the code printed above the QR code.
@@ -193,7 +198,7 @@ While the bridge is not paired, `serve` shows a QR code: point the iPhone camera
 Check that bamboozle can reach the printer:
 
 ```sh
-node src/cli.ts probe --config config.json
+bamboozle probe --config config.json
 ```
 
 `probe` connects to every configured printer, grabs one status report, prints it as JSON and exits. If all printers respond, you're good. If not, that printer shows `"ok": false`, plus the error when there was one.
@@ -230,13 +235,19 @@ PrivateTmp=yes
 WantedBy=multi-user.target
 ```
 
+Installed with npm? Drop `WorkingDirectory` and point `ExecStart` at the command: `ExecStart=/usr/local/bin/bamboozle serve --config /var/lib/bamboozle/config.json` (or wherever `command -v bamboozle` says). `ProtectHome=yes` hides `/home` and `/root` from the service, so Node has to be installed system-wide, not with a version manager in your home directory.
+
+With Docker Compose you're already done: `restart: unless-stopped` brings bamboozle back after a reboot, as long as Docker itself starts at boot.
+
 Keep `storagePath` when you move or upgrade bamboozle. It holds the bridge's identity and pairing keys. Lose it and the Home app has to pair again (and rearrange tiles, and redo automations, and generally make you regret everything).
 
 ## Troubleshooting
 
-**"No Response" on every tile.** Either bamboozle cannot reach the printer (while the printer is unavailable, every tile reports "No Response"), or the Home app cannot reach bamboozle. Run `probe` first: if it fails, it's the printer side. If `probe` works and the tiles still say "No Response", the Home app can't get to the bridge: see [Network and firewall](#network-and-firewall).
+**"No Response" on every tile.** Either bamboozle cannot reach the printer (while the printer is unavailable, every tile reports "No Response"), or the Home app cannot reach bamboozle. Run `probe` first (`docker compose run --rm bamboozle probe` in Docker): if it fails, it's the printer side. If `probe` works and the tiles still say "No Response", the Home app can't get to the bridge: see [Network and firewall](#network-and-firewall).
 
-**The camera tile stays blank.** Make sure the relay is running and reachable at the URL in `camera.source`. bamboozle needs ffmpeg on PATH (or set `camera.ffmpeg` to the full path). For VAAPI encoding, the bamboozle user needs access to the render device (`/dev/dri/renderD128` by default).
+**The camera tile stays blank.** Make sure the relay is running and reachable at the URL in `camera.source` (in Docker, `docker compose logs go2rtc` shows whether it reaches the printer). bamboozle needs ffmpeg on PATH (or set `camera.ffmpeg` to the full path). For VAAPI encoding, the bamboozle user needs access to the render device (`/dev/dri/renderD128` by default).
+
+**"Cannot write to /data (EACCES, running as uid 1000)".** Docker's `data/` folder is not writable for the container's user, usually because Docker created it as root. See **Whose `data/` is it?** under [Docker Compose](#docker-compose).
 
 **"certificate ... does not match the pinned ..."** The printer got a new TLS certificate (factory reset, board replacement). Delete the pin file at `storage/pins/<serial>.sha256` and bamboozle will trust the new certificate on the next connection.
 
@@ -324,6 +335,8 @@ npm install
 npm test
 npm run typecheck
 ```
+
+To try the container image from a checkout, `docker build -t ghcr.io/nxmxbbd/bamboozle .` and Compose uses your build instead of pulling one.
 
 `scripts/sanitize-report.ts` turns a captured printer report into a test fixture without serial numbers, job names or network addresses. Handy for sharing bug reports without sharing your whole setup.
 
