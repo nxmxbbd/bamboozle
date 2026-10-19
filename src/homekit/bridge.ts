@@ -1,10 +1,11 @@
 import { randomBytes, randomInt } from 'node:crypto';
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Accessory, Bridge, Characteristic, HAPStorage, Service, uuid } from 'hap-nodejs';
 import { VERSION } from '../version.ts';
 import { ADVERTISER_CIAO, CATEGORY_BRIDGE, EVENT_PAIRED, EVENT_UNPAIRED } from './hap-constants.ts';
 import { homeKitName } from './names.ts';
+import { checkPairingFiles, saveAtomically, writeAtomically } from './pairing-storage.ts';
 
 export interface BridgeIdentity {
   /** HAP "username": a locally administered MAC address. */
@@ -70,7 +71,7 @@ export function loadOrCreateIdentity(storagePath: string): BridgeIdentity {
   }
   const identity: BridgeIdentity = { username: generateUsername(), pincode: generatePincode(), setupID: generateSetupId() };
   mkdirSync(storagePath, { recursive: true, mode: 0o700 });
-  writeFileSync(file, `${JSON.stringify(identity, null, 2)}\n`, { mode: 0o600 });
+  writeAtomically(file, `${JSON.stringify(identity, null, 2)}\n`);
   chmodSync(file, 0o600);
   return identity;
 }
@@ -97,6 +98,9 @@ export async function startBridge(options: BridgeOptions, accessories: Accessory
   HAPStorage.setCustomStoragePath(hapStorage);
 
   const identity = loadOrCreateIdentity(options.storagePath);
+  // Before HAP-NodeJS loads the files: it would read a broken one as missing.
+  checkPairingFiles(hapStorage, identity.username);
+  saveAtomically();
   const bridge = new Bridge(homeKitName(options.name, 'bamboozle'), uuid.generate('bamboozle:bridge'));
   bridge
     .getService(Service.AccessoryInformation)!

@@ -258,6 +258,10 @@ Keep `storagePath` when you move or upgrade bamboozle. It holds the bridge's ide
 
 **"certificate ... does not match the pinned ..."** The printer got a new TLS certificate (factory reset, board replacement). Delete the pin file at `storage/pins/<serial>.sha256` and bamboozle will trust the new certificate on the next connection.
 
+**"storage/hap/... cannot be read (...). Not starting"** A pairing file is damaged, most likely by a disk that filled up while bamboozle 0.1.0 was saving it (later versions save it in a way a full disk cannot damage). bamboozle refuses to start rather than start with new keys the Home app has never seen. Restore `storage/hap/` from your backup and start again. No backup: remove the bridge from the Home app, delete `storage/hap/`, and pair again.
+
+**"overlay text not written"** The disk is full. The camera keeps showing the last status text and catches up once there is space again; HomeKit keeps working meanwhile.
+
 **Temperatures make the room say 30 C.** A 265 C nozzle is persuasive. Give the printer its own room, or turn off **Include in Home Summaries** in each temperature sensor's settings.
 
 **Watching remotely.** Viewing through a home hub works (tested once: the Home app asked for 640x360 and RTCP came back). If video does not load remotely, check that your home hub (Apple TV, HomePod, iPad) is signed into the same iCloud account and shows as "Connected" in Home settings.

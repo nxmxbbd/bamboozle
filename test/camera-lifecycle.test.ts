@@ -1,11 +1,12 @@
 // Regression tests for camera lifecycle findings (spawn failure, idle
 // streams, STOP / stop() racing setup, socket errors, RTCP filtering,
 // snapshot bounds, shutdown).
-import { test, after } from 'node:test';
+import { test, after, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { createSocket, type Socket } from 'node:dgram';
-import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import fs, { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { PrepareStreamResponse } from 'hap-nodejs';
@@ -728,4 +729,36 @@ test('refresh streaks are kept only for sizes still in the snapshot cache', asyn
   }
   assert.ok(cam.refreshStreakSizes <= SNAPSHOT_CACHE_SIZES, `${cam.refreshStreakSizes} streaks kept`);
   await cam.stop();
+});
+
+test('a full disk does not take the bridge down: overlay writes fail, warn once per streak, then recover', () => {
+  const lines: string[] = [];
+  const log = { log: (m: string) => lines.push(`log ${m}`), warn: (m: string) => lines.push(`warn ${m}`) };
+  const cam = camera({ log });
+  const overlayDir = join(dir, `overlay-${counter}`);
+  const update = (minute: number) =>
+    cam.update({ status: null, available: false, name: 'H2C', now: new Date(Date.UTC(2026, 0, 1, 0, minute)), finishedAt: null });
+
+  const write = fs.writeFileSync;
+  mock.method(fs, 'writeFileSync', (file: fs.PathOrFileDescriptor, data: unknown, options?: fs.WriteFileOptions) => {
+    if (typeof file === 'string' && file.startsWith(overlayDir)) {
+      throw Object.assign(new Error('ENOSPC: no space left on device, write'), { code: 'ENOSPC' });
+    }
+    return write(file, data as string, options);
+  });
+  syncBuiltinESMExports();
+  try {
+    for (let minute = 0; minute < 31; minute++) assert.doesNotThrow(() => update(minute));
+  } finally {
+    mock.restoreAll();
+    syncBuiltinESMExports();
+  }
+  const warns = lines.filter((l) => l.startsWith('warn'));
+  assert.equal(warns.length, 2, lines.join('\n')); // the first failure, then the 30th
+  assert.match(warns[0] ?? '', /overlay.*ENOSPC/);
+
+  update(40);
+  assert.match(lines.at(-1) ?? '', /^log \[H2C\] overlay text written again after 31 failed attempt\(s\)$/);
+  assert.equal(readFileSync(join(overlayDir, 'name.txt'), 'utf8'), 'H2C');
+  assert.match(readFileSync(join(overlayDir, 'pill-grey.txt'), 'utf8'), /●/);
 });

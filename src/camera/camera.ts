@@ -63,6 +63,8 @@ export const SNAPSHOT_FRESH_MS = 10_000;
 const SNAPSHOT_TIMEOUT_MS = 12_000;
 /** While background refreshes keep failing, repeat the warning every this many failures. */
 const REFRESH_FAILURE_LOG_EVERY = 30;
+/** While overlay writes keep failing (a full disk), repeat the warning every this many failures. */
+const OVERLAY_FAILURE_LOG_EVERY = 30;
 /** Distinct snapshot sizes kept in memory (least recently used evicted). */
 export const SNAPSHOT_CACHE_SIZES = 4;
 /** Snapshot renders waiting or running at once; more are refused. */
@@ -175,6 +177,8 @@ export class PrinterCamera implements CameraStreamingDelegate {
   readonly #freshMs: number;
   /** Failed background refreshes in a row, per snapshot size. */
   #refreshFailures = new Map<string, number>();
+  /** Failed overlay writes in a row. */
+  #overlayFailures = 0;
   readonly #streams = new Map<string, Stream>();
   readonly #snapshots = new Map<string, CachedSnapshot>();
   readonly #rendering = new Map<string, Promise<Buffer>>();
@@ -231,9 +235,26 @@ export class PrinterCamera implements CameraStreamingDelegate {
     return this.#refreshFailures.size;
   }
 
-  /** Push the latest printer state into the overlay (snapshots and live video). */
+  /**
+   * Push the latest printer state into the overlay (snapshots and live video).
+   * A write that fails (a full disk) is not fatal: video keeps the last text,
+   * the next update writes again, and a streak of failures is reported on its
+   * first failure and then every OVERLAY_FAILURE_LOG_EVERY failures.
+   */
   update(input: OverlayInput): void {
-    this.#files.write(overlayContent(input));
+    const content = overlayContent(input);
+    try {
+      this.#files.write(content);
+    } catch (error) {
+      this.#overlayFailures++;
+      if (this.#overlayFailures === 1 || this.#overlayFailures % OVERLAY_FAILURE_LOG_EVERY === 0) {
+        this.#options.log?.warn(`[${this.#options.name}] overlay text not written (${this.#overlayFailures}x): ${(error as Error).message}`);
+      }
+      return;
+    }
+    if (this.#overlayFailures === 0) return;
+    this.#options.log?.log(`[${this.#options.name}] overlay text written again after ${this.#overlayFailures} failed attempt(s)`);
+    this.#overlayFailures = 0;
   }
 
   // --- snapshots -------------------------------------------------------------
