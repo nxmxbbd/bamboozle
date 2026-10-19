@@ -1,6 +1,6 @@
 # bamboozle, plus go2rtc to relay the printer's camera.
 #
-#   mkdir data                               # once, next to this file
+#   mkdir -m 700 data                        # once, next to this file
 #   docker compose run --rm bamboozle init   # once: printer address and access code
 #   docker compose up -d
 #   docker compose logs -f bamboozle         # the pairing QR code

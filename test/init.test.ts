@@ -1,7 +1,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer, type Server } from 'node:tls';
@@ -79,6 +79,23 @@ test('init stops before asking anything when it cannot write the config director
   assert.equal(await init(options({ configPath: join(blocker, 'bamboozle', 'config.json') }), io), 1);
   assert.deepEqual(asked, [], 'nothing was asked');
   assert.ok(said.some((l) => l.includes(join(blocker, 'bamboozle')) && l.includes('ENOTDIR')), said.join('\n'));
+});
+
+test('init refuses a config directory every user can write to, unless it is sticky', async () => {
+  const run = async (mode: number) => {
+    const opts = options();
+    const configDir = join(opts.configPath, '..');
+    mkdirSync(configDir, { recursive: true });
+    chmodSync(configDir, mode);
+    const { io, said, asked } = fakeIO(['192.0.2.10', '12345678', '', '']);
+    return { code: await init(opts, io), said, asked };
+  };
+  const open = await run(0o777);
+  assert.equal(open.code, 1);
+  assert.deepEqual(open.asked, [], 'nothing was asked');
+  assert.ok(open.said.some((l) => l.includes('writable by every user')), open.said.join('\n'));
+  assert.equal((await run(0o1777)).code, 0, 'sticky, like /tmp: others cannot replace our files');
+  assert.equal((await run(0o775)).code, 0, 'group-writable, as mkdir makes it under a 002 umask');
 });
 
 test('init leaves an existing config (and its pairing) alone unless forced', async () => {

@@ -66,7 +66,7 @@ Make a folder and grab the two files:
 mkdir bamboozle && cd bamboozle
 curl -fsSLO https://raw.githubusercontent.com/nxmxbbd/bamboozle/main/docker/compose.yaml
 curl -fsSLO https://raw.githubusercontent.com/nxmxbbd/bamboozle/main/docker/go2rtc.yaml
-mkdir data
+mkdir -m 700 data
 ```
 
 Put the printer's IP address and LAN access code into `go2rtc.yaml`, then keep it to yourself with `chmod 600 go2rtc.yaml`. In `compose.yaml`, set `TZ` to your time zone, or the camera overlay will announce finish times in UTC.
@@ -88,7 +88,7 @@ Everything bamboozle knows lives in `data/`: the config, the access code and the
 
 A few details:
 
-- **Whose `data/` is it?** The container runs as uid 1000, the first user on most Linux machines. If `id -u` says something else, run the container as yourself: add `user: "1001:1001"` (your `id -u` and `id -g`) to the bamboozle service. If `data/` is not writable, `init` says so before asking anything.
+- **Whose `data/` is it?** The container runs as uid 1000, the first user on most Linux machines. If `id -u` says something else, run the container as yourself: add `user: "1001:1001"` (your `id -u` and `id -g`) to the bamboozle service. If `data/` is not writable, `init` says so before asking anything. (Tempted by `chmod 777 data`? `init` refuses that one: anybody on the machine could swap your pairing keys.)
 - **Hardware encoding (Intel GPU):** uncomment `devices` and `group_add` in `compose.yaml`, put in the id of the group that owns the GPU (`getent group render | cut -d: -f3`), and set `"camera": { "encoder": "vaapi" }` in `data/config.json`.
 - **Already running go2rtc?** The sidecar wants the same ports (1984 and 8554). Remove the go2rtc service and give `init` the RTSP URL of the one you have.
 
