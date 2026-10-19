@@ -4,7 +4,7 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after } from 'node:test';
-import { defaultConfigPath, openAdvice, openToEveryone, resolveConfigPath } from '../src/paths.ts';
+import { adviceFor, defaultConfigPath, openAdvice, openToEveryone, resolveConfigPath } from '../src/paths.ts';
 
 const home = () => '/home/someone';
 
@@ -63,18 +63,25 @@ test('openToEveryone follows a symlink: what lies above its target counts too', 
   assert.equal(openToEveryone(join(base, 'private', 'fine')), null, 'a link to a private place is fine');
 });
 
-test('the advice for an open directory never says to chmod a sticky one such as /tmp', () => {
+test('the advice for an open directory: chmod your own, never root on a sticky one such as /tmp', () => {
+  const chmod = /chmod 700/;
+  assert.match(adviceFor({ mine: true, root: false, sticky: false }), chmod);
+  assert.match(adviceFor({ mine: true, root: true, sticky: false }), chmod, 'root owning a plain open directory: close it');
+  assert.match(adviceFor({ mine: true, root: false, sticky: true }), chmod, 'your own folder set to 1777: closing it keeps the pairing in place');
+  const tmp = adviceFor({ mine: true, root: true, sticky: true, create: '/tmp/my bz' });
+  assert.doesNotMatch(tmp, /chmod/, 'root and /tmp: never');
+  assert.ok(tmp.includes("mkdir -m 700 '/tmp/my bz'"), `quoted for the shell: ${tmp}`);
+  assert.match(adviceFor({ mine: false, root: false, sticky: false }), /--config/, 'somebody else\'s open directory: go elsewhere');
+  assert.match(adviceFor({ mine: false, root: false, sticky: true }), /--config/);
+});
+
+test('openAdvice reads the facts from the directory', () => {
   const base = mkdtempSync(join(tmpdir(), 'bamboozle-paths-'));
   after(() => rmSync(base, { recursive: true, force: true }));
   const mine = join(base, 'mine');
   mkdirSync(mine);
   chmodSync(mine, 0o777);
-  assert.match(openAdvice(mine, mine), /chmod 700/, 'my own open directory: close it');
-  chmodSync(mine, 0o1777);
-  const advice = openAdvice(mine, join(mine, 'bz', 'storage'));
-  assert.doesNotMatch(advice, /chmod/, 'sticky (think /tmp): never chmod it');
-  assert.ok(advice.includes(`mkdir -m 700 ${join(mine, 'bz')}`), advice);
-  assert.match(openAdvice(mine, mine), /--config/, 'nothing to create below it: go elsewhere');
+  assert.match(openAdvice(mine, mine), /chmod 700/, 'created by this user, not sticky: chmod, as root or not');
 });
 
 test('openToEveryone checks every directory a lookup passes, intermediate links in a chain included', () => {

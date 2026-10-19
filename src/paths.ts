@@ -89,12 +89,27 @@ export function openToEveryone(path: string, platform: NodeJS.Platform = process
   return null;
 }
 
+/** A path as a shell word, for hints people copy. */
+export function shellWord(path: string): string {
+  return /^[\w@%+=:,./-]+$/.test(path) ? path : `'${path.replaceAll("'", `'\\''`)}'`;
+}
+
 /**
- * What to do about `open` (from openToEveryone) for `place`. chmod only for a
- * directory of one's own that is not sticky: run as root, "chmod 700 /tmp"
- * would succeed and break every other program. Below a sticky directory, a
- * private directory made first is safe (others cannot rename it away).
+ * What to do about an open directory, from the facts about it. chmod is
+ * right for one's own directory, except for root on a sticky one: that is
+ * /tmp, and "chmod 700 /tmp" would break every other program. Below a
+ * sticky directory, a private directory made first is safe (others cannot
+ * rename it away); otherwise the config belongs somewhere else.
  */
+export function adviceFor(facts: { mine: boolean; root: boolean; sticky: boolean; create?: string }): string {
+  if (facts.mine && !(facts.sticky && facts.root)) return 'Run chmod 700 on it (or at least chmod o-w).';
+  if (facts.sticky && facts.create) {
+    return `Create ${facts.create} yourself first (mkdir -m 700 ${shellWord(facts.create)}), or put the config somewhere private with --config.`;
+  }
+  return 'Put the config somewhere private with --config.';
+}
+
+/** adviceFor() for `open` (from openToEveryone), reached on the way to `place`. */
 export function openAdvice(open: string, place: string): string {
   let mode = 0;
   let owner: number | undefined;
@@ -103,12 +118,14 @@ export function openAdvice(open: string, place: string): string {
     mode = stat.mode;
     owner = stat.uid;
   } catch {
-    // gone meanwhile: fall through to the generic advice
+    // gone meanwhile: the generic advice
   }
-  if (owner !== undefined && owner === process.getuid?.() && !(mode & 0o1000)) return 'Run chmod 700 on it (or at least chmod o-w).';
+  const me = process.getuid?.();
   const below = relative(open, resolve(place)).split(sep)[0];
-  if (mode & 0o1000 && below && below !== '..') {
-    return `Create ${join(open, below)} yourself first (mkdir -m 700 ${join(open, below)}), or put the config somewhere private with --config.`;
-  }
-  return 'Put the config somewhere private with --config.';
+  return adviceFor({
+    mine: owner !== undefined && owner === me,
+    root: me === 0,
+    sticky: (mode & 0o1000) !== 0,
+    ...(below && below !== '..' ? { create: join(open, below) } : {}),
+  });
 }

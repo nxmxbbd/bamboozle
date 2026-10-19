@@ -2,7 +2,7 @@ import { accessSync, chmodSync, constants, existsSync, lstatSync, mkdirSync, rea
 import { dirname, join, resolve } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { ConfigError, parseConfig, parseJson } from './config.ts';
-import { openAdvice, openToEveryone } from './paths.ts';
+import { openAdvice, openToEveryone, shellWord } from './paths.ts';
 import { isPrinterSerial } from './printer/serial.ts';
 
 export interface InitOptions {
@@ -30,11 +30,6 @@ export interface InitIO {
 export const ACCESS_CODE_FILE = 'printer.code';
 const DEFAULT_NAME = '3D Printer';
 const TRIES = 3;
-
-/** A path as a shell word, for hints people copy. */
-function shellWord(path: string): string {
-  return /^[\w@%+=:,./-]+$/.test(path) ? path : `'${path.replaceAll("'", `'\\''`)}'`;
-}
 
 /**
  * How to start the bridge, for the closing hint: with the --config init was
