@@ -264,6 +264,8 @@ Keep `storagePath` when you move or upgrade bamboozle. It holds the bridge's ide
 
 **"overlay text not written"** The disk is full. The camera keeps showing the last status text and catches up once there is space again; HomeKit keeps working meanwhile. If bamboozle has to restart while the disk is still full, it may stop with `ENOSPC` until there is space again; the pairing is not affected.
 
+**"camera settings not saved"** The disk is full. A camera setting changed in the Home app (turning the camera off, say) works right away; bamboozle keeps trying to save it every minute and logs "camera settings saved again" once there is space.
+
 **Temperatures make the room say 30 C.** A 265 C nozzle is persuasive. Give the printer its own room, or turn off **Include in Home Summaries** in each temperature sensor's settings.
 
 **Watching remotely.** Viewing through a home hub works (tested once: the Home app asked for 640x360 and RTCP came back). If video does not load remotely, check that your home hub (Apple TV, HomePod, iPad) is signed into the same iCloud account and shows as "Connected" in Home settings.

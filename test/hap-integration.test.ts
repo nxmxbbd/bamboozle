@@ -69,6 +69,7 @@ let printer: PrinterAccessories;
 let camera: PrinterCamera;
 let db: HapAccessory[] = [];
 const warnings: string[] = [];
+const logs: string[] = [];
 
 before(async () => {
   storage = realpathSync(mkdtempSync(join(tmpdir(), 'bamboozle-hap-'))); // the full-disk test matches paths as written
@@ -92,7 +93,7 @@ before(async () => {
     ffmpeg: { path: 'ffmpeg', encoder: 'libx264', vaapiDevice: '/dev/dri/renderD128' },
   });
   camera.update({ status, available: true, name: 'H2C', now: new Date(), finishedAt: null });
-  bridge = await startBridge({ name: 'bamboozle test', port, bind: ['127.0.0.1'], storagePath: storage, log: { warn: (m: string) => warnings.push(m) } }, [
+  bridge = await startBridge({ name: 'bamboozle test', port, bind: ['127.0.0.1'], storagePath: storage, log: { log: (m: string) => logs.push(m), warn: (m: string) => warnings.push(m) }, cameraSettingsRetryMs: 300 }, [
     ...printer.accessories,
     camera.accessory,
   ]);
@@ -210,7 +211,16 @@ test('the camera serves an overlaid JPEG snapshot over HAP', async () => {
   assert.ok(image.length > 5000, `a real picture, ${image.length} bytes`);
 });
 
-test('a full disk while the Home app changes a camera setting does not take the bridge down', async () => {
+/** Polls instead of guessing how long a timer takes on a busy machine. */
+async function until(check: () => boolean, what: string, ms = 10_000): Promise<void> {
+  const deadline = Date.now() + ms;
+  while (!check()) {
+    if (Date.now() > deadline) assert.fail(`timed out waiting for ${what}`);
+    await delay(50);
+  }
+}
+
+test('a camera setting changed on a full disk is saved once there is space, without a crash', async () => {
   const camera = cameraAccessory();
   const rtp = camera.services.find((s) => fullType(s.type) === CAMERA_STREAM_MANAGEMENT);
   assert.ok(rtp, 'camera stream management');
@@ -220,8 +230,10 @@ test('a full disk while the Home app changes a camera setting does not take the 
   const saved = () => (existsSync(file) ? readFileSync(file, 'utf8') : null);
   const before = saved(); // none yet on a bridge whose camera settings never changed
   const write = fs.writeFileSync;
+  let failed = 0;
   mock.method(fs, 'writeFileSync', (file: fs.PathOrFileDescriptor, data: unknown, options?: fs.WriteFileOptions) => {
     if (typeof file === 'string' && file.startsWith(hap)) {
+      failed++;
       write(file, '');
       throw Object.assign(new Error('ENOSPC: no space left on device, write'), { code: 'ENOSPC' });
     }
@@ -230,25 +242,21 @@ test('a full disk while the Home app changes a camera setting does not take the 
   syncBuiltinESMExports();
   try {
     // HAP-NodeJS saves camera settings ~100 ms after the change, from a timer.
-    await client.setCharacteristics({ [id]: 0 });
-    await delay(400);
+    await client.setCharacteristics({ [id]: 0 }); // the camera turned off
+    await until(() => failed >= 2, 'the save and one retry to fail');
   } finally {
     mock.restoreAll();
     syncBuiltinESMExports();
   }
-  assert.ok(warnings.some((w) => /camera settings not saved: ENOSPC/.test(w)), warnings.join('\n'));
-
+  assert.equal(warnings.filter((w) => /camera settings not saved: ENOSPC/.test(w)).length, 1, warnings.join('\n'));
   assert.equal(saved(), before, 'the saved settings are untouched');
 
-  // Still serving, and changes are saved again once there is space.
+  // Space again, and nothing else changes: the off is saved by the retry.
+  await until(() => saved() !== before, 'the retry to save');
+  const off = saved();
+  assert.ok(logs.some((l) => l === 'camera settings saved again'), logs.join('\n'));
+
+  // Still serving, and later changes are saved as usual.
   await client.setCharacteristics({ [id]: 1 });
-  await delay(400);
-  const on = saved();
-  assert.ok(on !== null && JSON.parse(on), 'the camera turned on again is saved');
-  await client.setCharacteristics({ [id]: 0 });
-  await delay(400);
-  assert.notEqual(saved(), on, 'the camera turned off is saved');
-  await client.setCharacteristics({ [id]: 1 });
-  await delay(400);
-  assert.equal(saved(), on, 'and on again');
+  await until(() => saved() !== off, 'the camera turned on to be saved');
 });

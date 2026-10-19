@@ -82,8 +82,13 @@ export interface BridgeOptions {
   /** Interfaces or addresses to advertise on (hap-nodejs always listens on all); all when undefined. */
   bind?: string[];
   storagePath: string;
-  log?: Pick<Console, 'warn'>;
+  log?: Pick<Console, 'log' | 'warn'>;
+  /** A camera settings save that failed is tried again this often (default CAMERA_SETTINGS_RETRY_MS). */
+  cameraSettingsRetryMs?: number;
 }
+
+/** How often a failed camera settings save (a full disk) is tried again. */
+export const CAMERA_SETTINGS_RETRY_MS = 60_000;
 
 export interface RunningBridge {
   identity: BridgeIdentity;
@@ -110,18 +115,31 @@ export async function startBridge(options: BridgeOptions, accessories: Accessory
     .setCharacteristic(Characteristic.FirmwareRevision, VERSION);
   bridge.addBridgedAccessories(accessories);
 
-  // HAP-NodeJS saves camera settings from a timer, where a failed save (a full
-  // disk) is an uncaught exception that ends the process. The saved file is
-  // intact either way, and every save writes the whole state, so report it and
-  // let the next change save again. Bridged accessories save through this one.
+  // HAP-NodeJS saves camera settings (whether each camera is on) from a timer,
+  // where a failed save (a full disk) is an uncaught exception that ends the
+  // process. The saved file is intact either way and every save writes the
+  // whole state, so report it once and keep trying: a camera turned off while
+  // the disk was full must not come back on at the next restart. Bridged
+  // accessories save through this one.
   const storage = bridge.controllerStorage;
   const save = storage.save.bind(storage);
+  const retryMs = options.cameraSettingsRetryMs ?? CAMERA_SETTINGS_RETRY_MS;
+  let retry: NodeJS.Timeout | undefined;
+  let failing = false;
   storage.save = () => {
+    clearTimeout(retry);
+    retry = undefined;
     try {
       save();
     } catch (error) {
-      options.log?.warn(`camera settings not saved: ${(error as Error).message}`);
+      if (!failing) options.log?.warn(`camera settings not saved: ${(error as Error).message}; trying again every ${retryMs / 1000} s`);
+      failing = true;
+      retry = setTimeout(() => storage.save(), retryMs).unref();
+      return;
     }
+    if (!failing) return;
+    failing = false;
+    options.log?.log('camera settings saved again');
   };
 
   let paired = false;
@@ -153,6 +171,10 @@ export async function startBridge(options: BridgeOptions, accessories: Accessory
     setupURI: bridge.setupURI(),
     isPaired: () => paired,
     onPairingChange: (listener) => listeners.push(listener),
-    stop: () => bridge.unpublish(),
+    stop: async () => {
+      if (retry) storage.save(); // a last try for settings still unsaved
+      clearTimeout(retry);
+      await bridge.unpublish();
+    },
   };
 }
