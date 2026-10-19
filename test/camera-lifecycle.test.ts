@@ -655,3 +655,30 @@ test('stop cancels a running snapshot render and refuses new work', async () => 
   await new Promise((r) => setTimeout(r, 300));
   assert.ok(intervals(log).every((run) => run.end === undefined), 'the render was killed before finishing');
 });
+
+// A fake ffmpeg that fails while a flag file exists.
+const flaky = join(dir, 'flaky-ffmpeg.sh');
+writeFileSync(flaky, '#!/bin/sh\nif [ -e "$BZ_FLAKY_FLAG" ]; then echo "simulated source timeout" >&2; exit 1; fi\nprintf "\\377\\330\\377\\331"\n');
+chmodSync(flaky, 0o755);
+
+// The Home app keeps showing the last good image while background refreshes
+// fail, so a failing refresh must at least show up in the log.
+test('a failing background snapshot refresh is logged, and so is the recovery', async () => {
+  const flag = join(dir, 'flaky.flag');
+  process.env['BZ_FLAKY_FLAG'] = flag;
+  const lines: string[] = [];
+  const log = { log: (m: string) => void lines.push(`log ${m}`), warn: (m: string) => void lines.push(`warn ${m}`) };
+  const cam = camera({ ffmpeg: { path: flaky, encoder: 'libx264', vaapiDevice: '/dev/dri/renderD128' }, log, snapshotFreshMs: 0 });
+  const first = await snapshot(cam, 640, 360);
+  writeFileSync(flag, '');
+  await delay(5);
+  assert.deepEqual(await snapshot(cam, 640, 360), first, 'the stale image is still served');
+  await waitFor(() => lines.some((l) => l.startsWith('warn')), 3000);
+  assert.match(lines.find((l) => l.startsWith('warn')) ?? '', /snapshot refresh failed \(1x\): ffmpeg exited with 1: simulated source timeout/);
+  rmSync(flag);
+  await delay(5);
+  await snapshot(cam, 640, 360);
+  await waitFor(() => lines.some((l) => l.includes('refresh again')), 3000);
+  assert.ok(lines.some((l) => /^log .*snapshots refresh again after 1 failed attempt/.test(l)), lines.join('\n'));
+  await cam.stop();
+});

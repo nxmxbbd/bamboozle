@@ -43,6 +43,8 @@ export interface PrinterCameraOptions {
   streamIdleMs?: number;
   /** A prepared stream that is never started gives its port back after this. */
   preparedTtlMs?: number;
+  /** A cached snapshot older than this is refreshed in the background (default SNAPSHOT_FRESH_MS). */
+  snapshotFreshMs?: number;
   /** Test seam: called with each stream's UDP socket right after it is created. */
   onStreamSocket?: (sessionID: string, socket: Socket) => void;
 }
@@ -59,6 +61,8 @@ const RESOLUTIONS: Array<[number, number, number]> = [
 /** A snapshot older than this is still served, but a fresh one is rendered. */
 export const SNAPSHOT_FRESH_MS = 10_000;
 const SNAPSHOT_TIMEOUT_MS = 12_000;
+/** While background refreshes keep failing, repeat the warning every this many failures. */
+const REFRESH_FAILURE_LOG_EVERY = 30;
 /** Distinct snapshot sizes kept in memory (least recently used evicted). */
 export const SNAPSHOT_CACHE_SIZES = 4;
 /** Snapshot renders waiting or running at once; more are refused. */
@@ -168,6 +172,9 @@ export class PrinterCamera implements CameraStreamingDelegate {
   readonly #filter: string;
   readonly #idleMs: number;
   readonly #preparedTtlMs: number;
+  readonly #freshMs: number;
+  /** Background snapshot refreshes that failed in a row. */
+  #refreshFailures = 0;
   readonly #streams = new Map<string, Stream>();
   readonly #snapshots = new Map<string, CachedSnapshot>();
   readonly #rendering = new Map<string, Promise<Buffer>>();
@@ -180,6 +187,7 @@ export class PrinterCamera implements CameraStreamingDelegate {
     this.#options = options;
     this.#idleMs = options.streamIdleMs ?? DEFAULT_STREAM_IDLE_MS;
     this.#preparedTtlMs = options.preparedTtlMs ?? DEFAULT_PREPARED_TTL_MS;
+    this.#freshMs = options.snapshotFreshMs ?? SNAPSHOT_FRESH_MS;
     this.#files = new OverlayFiles(options.overlayDir);
     this.#filter = overlayFilter(this.#files, options.fonts);
 
@@ -237,11 +245,20 @@ export class PrinterCamera implements CameraStreamingDelegate {
       this.#snapshots.delete(key);
       this.#snapshots.set(key, cached);
       callback(undefined, cached.image);
-      if (Date.now() - cached.at > SNAPSHOT_FRESH_MS) this.#render(width, height).catch(() => {});
+      // Only the request that starts a refresh reports on it, so one failure counts once.
+      if (Date.now() - cached.at > this.#freshMs && !this.#rendering.has(key)) {
+        this.#render(width, height).then(
+          () => this.#refreshed(),
+          (error: Error) => this.#refreshFailed(key, error),
+        );
+      }
       return;
     }
     this.#render(width, height).then(
-      (image) => callback(undefined, image),
+      (image) => {
+        this.#refreshed();
+        callback(undefined, image);
+      },
       (error: Error) => {
         if (!this.#stopping) this.#options.log?.warn(`[${this.#options.name}] snapshot failed: ${error.message}`);
         callback(error);
@@ -272,6 +289,27 @@ export class PrinterCamera implements CameraStreamingDelegate {
     this.#queue = job.catch(() => {});
     this.#rendering.set(key, job);
     return job;
+  }
+
+  /**
+   * A background refresh failed. The Home app keeps the last good image, so
+   * nothing looks broken there: say so in the log, on the first failure of a
+   * streak and then every REFRESH_FAILURE_LOG_EVERY failures.
+   */
+  #refreshFailed(key: string, error: Error): void {
+    if (this.#stopping) return;
+    this.#refreshFailures++;
+    if (this.#refreshFailures !== 1 && this.#refreshFailures % REFRESH_FAILURE_LOG_EVERY !== 0) return;
+    const cached = this.#snapshots.get(key);
+    const age = cached ? `, serving an image from ${Math.round((Date.now() - cached.at) / 1000)} s ago` : '';
+    this.#options.log?.warn(`[${this.#options.name}] snapshot refresh failed (${this.#refreshFailures}x): ${error.message}${age}`);
+  }
+
+  /** A snapshot rendered: end a streak of failed refreshes, if there was one. */
+  #refreshed(): void {
+    if (this.#refreshFailures === 0) return;
+    this.#options.log?.log(`[${this.#options.name}] snapshots refresh again after ${this.#refreshFailures} failed attempt(s)`);
+    this.#refreshFailures = 0;
   }
 
   // --- live video --------------------------------------------------------------
