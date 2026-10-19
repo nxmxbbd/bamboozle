@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import * as hap from 'hap-nodejs';
-import { Characteristic, Service, type Accessory, type WithUUID } from 'hap-nodejs';
+import * as hap from '@homebridge/hap-nodejs';
+import { Characteristic, Service, type Accessory, type WithUUID } from '@homebridge/hap-nodejs';
 import {
   ADVERTISER_CIAO,
   CATEGORY_BRIDGE,

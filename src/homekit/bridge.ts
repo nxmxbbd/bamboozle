@@ -1,11 +1,11 @@
 import { randomBytes, randomInt } from 'node:crypto';
 import { chmodSync, mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { Accessory, Bridge, Characteristic, HAPStorage, Service, uuid } from 'hap-nodejs';
+import { Accessory, Bridge, Characteristic, HAPStorage, Service, uuid } from '@homebridge/hap-nodejs';
 import { VERSION } from '../version.ts';
 import { ADVERTISER_CIAO, CATEGORY_BRIDGE, EVENT_PAIRED, EVENT_UNPAIRED } from './hap-constants.ts';
 import { homeKitName } from './names.ts';
-import { checkPairingFiles, saveAtomically, writeAtomically } from './pairing-storage.ts';
+import { checkPairingFiles, writeAtomically } from './pairing-storage.ts';
 
 export interface BridgeIdentity {
   /** HAP "username": a locally administered MAC address. */
@@ -101,7 +101,6 @@ export async function startBridge(options: BridgeOptions, accessories: Accessory
   const identity = loadOrCreateIdentity(options.storagePath);
   // Before HAP-NodeJS loads the files: it would read a broken one as missing.
   checkPairingFiles(hapStorage, identity.username);
-  saveAtomically();
   const bridge = new Bridge(homeKitName(options.name, 'bamboozle'), uuid.generate('bamboozle:bridge'));
   bridge
     .getService(Service.AccessoryInformation)!

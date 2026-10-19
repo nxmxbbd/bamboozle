@@ -1,31 +1,20 @@
 import { randomBytes } from 'node:crypto';
 import { readdirSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
-import { AccessoryInfo, HAPStorage } from 'hap-nodejs';
+import { AccessoryInfo } from '@homebridge/hap-nodejs';
 
 // HAP-NodeJS keeps the pairing state in storage/hap, one JSON file per key and
 // bridge: AccessoryInfo.<id>.json (the bridge's long-term keys and the paired
 // Home app controllers), IdentifierCache.<id>.json (the ids the Home app hangs
 // rooms and automations on) and ControllerStorage.<id>.json (camera settings).
-// Two of its habits cost a paired bridge when the disk fills up:
-// - it rewrites AccessoryInfo on every start, with a plain write that empties
-//   the file before it fails, and
-// - a file it cannot parse reads as missing, so the next start quietly makes
-//   new keys, and the Home app shows the bridge as not responding until it is
-//   removed and added again.
-// Both are closed here: writes cannot leave a file half done, unchanged files
-// are not written at all, and a file that is there but unreadable stops the
-// bridge instead of being replaced.
+// Since 2.2 it saves them atomically, so a full disk no longer empties them.
+// But a file it cannot parse still reads as missing: the next start quietly
+// makes new keys (or ids), and the Home app shows the bridge as not
+// responding until it is removed and added again. checkPairingFiles stops the
+// bridge instead, while the damaged file can still be restored.
 
-/** The files HAP-NodeJS 0.14 keeps per bridge, as <kind>.<id>.json. */
+/** The files HAP-NodeJS keeps per bridge, as <kind>.<id>.json. */
 const PAIRING_FILE_KINDS = ['AccessoryInfo', 'IdentifierCache', 'ControllerStorage'] as const;
-
-/** What node-persist 0.0.x (HAP-NodeJS's storage) looks like from the inside. */
-interface NodePersist {
-  options: { dir: string; ttl?: unknown; stringify: (value: unknown) => string };
-  data: Record<string, unknown>;
-  persistKeySync(key: string): void;
-}
 
 function code(error: unknown): string | undefined {
   return (error as NodeJS.ErrnoException).code;
@@ -53,7 +42,7 @@ function destination(file: string): string {
  */
 export function writeAtomically(file: string, text: string): void {
   const target = destination(file);
-  // A dot name: node-persist skips dot files when it loads the directory.
+  // A dot name: HAP-NodeJS skips dot files when it loads its directory.
   // Unique and created exclusively: another process saving to the same
   // storage cannot empty it before it is renamed into place. A crash between
   // write and rename leaves one such file behind; it is not swept up at start,
@@ -67,19 +56,6 @@ export function writeAtomically(file: string, text: string): void {
     if (code(error) !== 'EEXIST') rmSync(temporary, { force: true });
     throw error;
   }
-}
-
-/**
- * Save one pairing file. HAP-NodeJS saves AccessoryInfo on every start, almost
- * always unchanged: skipping those writes lets the bridge start on a full disk.
- */
-export function savePairingFile(file: string, text: string): void {
-  try {
-    if (readFileSync(file, 'utf8') === text) return;
-  } catch {
-    // missing or unreadable: write it
-  }
-  writeAtomically(file, text);
 }
 
 function problem(text: string, keys: boolean): string | null {
@@ -145,27 +121,4 @@ export function checkPairingFiles(hapDir: string, username: string): void {
     else found = problem(readFileSync(file, 'utf8'), name === keysFile);
     if (found !== null) throw new Error(unreadable(file, found, hapDir, keysFile));
   }
-}
-
-/**
- * Make HAP-NodeJS save its pairing files with savePairingFile. Call after
- * HAPStorage.setCustomStoragePath and before publish(). HAP-NodeJS only uses
- * node-persist's synchronous calls (setItemSync, removeItemSync, getItem), and
- * setItemSync saves through persistKeySync, which this replaces.
- */
-export function saveAtomically(): void {
-  const store = HAPStorage.storage() as unknown as Partial<NodePersist>;
-  const options = store.options;
-  if (
-    typeof store.persistKeySync !== 'function' ||
-    typeof store.data !== 'object' ||
-    typeof options?.dir !== 'string' ||
-    typeof options.stringify !== 'function' ||
-    options.ttl
-  ) {
-    throw new Error('the HAP-NodeJS storage is not the node-persist 0.0.x that bamboozle knows how to save safely');
-  }
-  store.persistKeySync = function persistKeySync(this: NodePersist, key: string): void {
-    savePairingFile(join(this.options.dir, key), this.options.stringify(this.data[key]));
-  };
 }

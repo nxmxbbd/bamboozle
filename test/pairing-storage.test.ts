@@ -4,7 +4,7 @@ import fs, { lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSyn
 import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
-import { checkPairingFiles, savePairingFile, writeAtomically } from '../src/homekit/pairing-storage.ts';
+import { checkPairingFiles, writeAtomically } from '../src/homekit/pairing-storage.ts';
 
 const dir = mkdtempSync(join(tmpdir(), 'bamboozle-pairing-'));
 after(() => rmSync(dir, { recursive: true, force: true }));
@@ -114,29 +114,6 @@ test('writeAtomically: a link is written through, and stays a link', () => {
   assert.ok(lstatSync(join(folder, 'link.json')).isSymbolicLink());
   assert.equal(readFileSync(join(folder, 'real.json'), 'utf8'), 'new');
   assert.deepEqual(readdirSync(folder).sort(), ['link.json', 'real.json']);
-});
-
-test('savePairingFile: an unchanged file is not written again', () => {
-  const folder = join(dir, 'save-unchanged');
-  mkdirSync(folder);
-  const file = join(folder, KEYS);
-  const write = fs.writeFileSync;
-  let writes = 0;
-  mock.method(fs, 'writeFileSync', (target: fs.PathOrFileDescriptor, data: unknown, options?: fs.WriteFileOptions) => {
-    writes++;
-    return write(target, data as string, options);
-  });
-  syncBuiltinESMExports();
-  try {
-    savePairingFile(file, GOOD_KEYS); // new
-    savePairingFile(file, GOOD_KEYS); // the same again: skipped
-    savePairingFile(file, `${GOOD_KEYS} `); // changed
-  } finally {
-    mock.restoreAll();
-    syncBuiltinESMExports();
-  }
-  assert.equal(writes, 2);
-  assert.equal(readFileSync(file, 'utf8'), `${GOOD_KEYS} `);
 });
 
 test('writeAtomically: writes the content privately and leaves no temporary file', () => {

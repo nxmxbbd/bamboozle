@@ -14,7 +14,7 @@ import {
   type SnapshotRequestCallback,
   type StreamingRequest,
   type StreamRequestCallback,
-} from 'hap-nodejs';
+} from '@homebridge/hap-nodejs';
 import { VERSION } from '../version.ts';
 import {
   CATEGORY_CAMERA,

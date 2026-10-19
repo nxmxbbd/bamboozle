@@ -1,21 +1,23 @@
 // A full disk while the pairing keys are saved must leave the saved keys
-// intact. HAP-NodeJS saves them on every start, and a plain write empties the
-// file before it fails: the next start then found no keys, made new ones, and
-// the Home app lost the bridge. The kernel's behaviour is reproduced here: the
-// write empties its target, then fails with ENOSPC.
+// intact. HAP-NodeJS saves them on every start; before 2.2 it did so with a
+// plain write that empties the file before it fails, so the next start found
+// no keys, made new ones, and the Home app lost the bridge. The kernel's
+// behaviour is reproduced here: a write empties its target, then fails with
+// ENOSPC. This guards the dependency's atomic save.
 // Own file: HAP-NodeJS keeps one storage location per process.
 
 import { test, after, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import { generateKeyPairSync } from 'node:crypto';
-import fs, { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import fs, { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { syncBuiltinESMExports } from 'node:module';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { startBridge, type RunningBridge } from '../src/homekit/bridge.ts';
 
-const dir = mkdtempSync(join(tmpdir(), 'bamboozle-enospc-'));
+// realpath: the injected failure matches paths as written (macOS's tmpdir is behind a link).
+const dir = realpathSync(mkdtempSync(join(tmpdir(), 'bamboozle-enospc-')));
 let bridge: RunningBridge | undefined;
 after(async () => {
   mock.restoreAll();
@@ -61,7 +63,6 @@ test('a full disk while saving the pairing keys leaves the saved keys untouched'
   mkdirSync(hap, { recursive: true });
   writeFileSync(join(storage, 'bridge.json'), JSON.stringify({ username: '0E:11:22:33:44:56', pincode: '031-45-154', setupID: 'TS01' }));
   const info = join(hap, 'AccessoryInfo.0E1122334456.json');
-  // Not what publish() would save (other display name), so a save is attempted.
   const saved = savedAccessoryInfo();
   writeFileSync(info, saved);
 

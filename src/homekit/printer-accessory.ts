@@ -6,7 +6,7 @@ import {
   uuid,
   type CharacteristicValue,
   type WithUUID,
-} from 'hap-nodejs';
+} from '@homebridge/hap-nodejs';
 import { VERSION } from '../version.ts';
 import { CATEGORY_SENSOR, STATUS_COMMUNICATION_FAILURE } from './hap-constants.ts';
 import { homeKitName } from './names.ts';

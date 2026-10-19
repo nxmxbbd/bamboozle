@@ -7,7 +7,7 @@ import type {
   MDNSAdvertiser,
   SRTPCryptoSuites,
   StreamRequestTypes,
-} from 'hap-nodejs';
+} from '@homebridge/hap-nodejs';
 
 // hap-nodejs declares these as ambient const enums, which cannot be read
 // under isolated / verbatim module compilation. At runtime they are plain

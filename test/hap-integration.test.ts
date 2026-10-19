@@ -5,13 +5,13 @@
 
 import { test, after, before, mock } from 'node:test';
 import assert from 'node:assert/strict';
-import fs, { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import fs, { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs';
 import { syncBuiltinESMExports } from 'node:module';
 import { setTimeout as delay } from 'node:timers/promises';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { Characteristic, Service } from 'hap-nodejs';
+import { Characteristic, Service } from '@homebridge/hap-nodejs';
 import { HttpClient } from 'hap-controller';
 import { startBridge, type RunningBridge } from '../src/homekit/bridge.ts';
 import { PrinterCamera } from '../src/camera/camera.ts';
@@ -71,7 +71,7 @@ let db: HapAccessory[] = [];
 const warnings: string[] = [];
 
 before(async () => {
-  storage = mkdtempSync(join(tmpdir(), 'bamboozle-hap-'));
+  storage = realpathSync(mkdtempSync(join(tmpdir(), 'bamboozle-hap-'))); // the full-disk test matches paths as written
   port = await freePort();
   printer = new PrinterAccessories({
     name: 'H2C',

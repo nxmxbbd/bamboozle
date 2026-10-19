@@ -1,12 +1,14 @@
-// A pairing has to survive a restart, now that bamboozle saves it rather than
-// HAP-NodeJS's own writer: pair with an independent HomeKit controller,
-// restart the bridge in a new process on a full disk (nothing needs saving,
-// so it must come up), and log in again with the controller's long-term keys.
+// A pairing has to survive restarts, including one on a full disk: pair with
+// an independent HomeKit controller, try to restart the bridge in a new
+// process while every write fails as on a full disk (HAP-NodeJS saves its
+// pairing on every start, so it must stop without touching the saved keys),
+// then restart it with space again and log in with the controller's
+// long-term keys.
 
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync } from 'node:fs';
 import { connect, createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -14,7 +16,8 @@ import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { HttpClient } from 'hap-controller';
 
-const storage = mkdtempSync(join(tmpdir(), 'bamboozle-restart-'));
+// realpath: the full-disk preload matches paths as written (macOS's tmpdir is behind a link).
+const storage = realpathSync(mkdtempSync(join(tmpdir(), 'bamboozle-restart-')));
 const children: ChildProcess[] = [];
 after(() => {
   for (const child of children) child.kill('SIGKILL');
@@ -76,12 +79,11 @@ function stopProcess(child: ChildProcess): Promise<void> {
   });
 }
 
-function signPk(username: string): string {
-  const file = join(storage, 'hap', `AccessoryInfo.${username.replaceAll(':', '')}.json`);
-  return (JSON.parse(readFileSync(file, 'utf8')) as { signPk: string }).signPk;
+function keysFile(username: string): string {
+  return readFileSync(join(storage, 'hap', `AccessoryInfo.${username.replaceAll(':', '')}.json`), 'utf8');
 }
 
-test('a pairing survives a restart on a full disk', { timeout: 60_000 }, async () => {
+test('a pairing survives a restart, and a restart on a full disk leaves it alone', { timeout: 60_000 }, async () => {
   const port = await freePort();
   const first = await startProcess(port);
   assert.equal(first.info.paired, false);
@@ -92,17 +94,22 @@ test('a pairing survives a restart on a full disk', { timeout: 60_000 }, async (
   assert.ok(keys, 'long-term keys from pair setup');
   await setup.close();
   await stopProcess(first.child);
-  const pk = signPk(first.info.username);
+  const saved = keysFile(first.info.username);
+  assert.equal(Object.keys((JSON.parse(saved) as { pairedClients: object }).pairedClients).length, 1);
 
-  const secondPort = await freePort();
-  const second = await startProcess(secondPort, ['--import', fullDisk], { BAMBOOZLE_FULL_DISK: storage });
-  assert.equal(second.info.username, first.info.username);
-  assert.equal(second.info.paired, true);
-  await listening(secondPort);
-  const verify = new HttpClient(second.info.username, '127.0.0.1', secondPort, keys);
+  await assert.rejects(startProcess(await freePort(), ['--import', fullDisk], { BAMBOOZLE_FULL_DISK: storage }), /ENOSPC/);
+  assert.equal(keysFile(first.info.username), saved, 'the saved keys are untouched');
+  assert.deepEqual(readdirSync(join(storage, 'hap')).filter((name) => name.startsWith('.')), [], 'no temporary file left');
+
+  const thirdPort = await freePort();
+  const third = await startProcess(thirdPort);
+  assert.equal(third.info.username, first.info.username);
+  assert.equal(third.info.paired, true);
+  await listening(thirdPort);
+  const verify = new HttpClient(third.info.username, '127.0.0.1', thirdPort, keys);
   const db = (await verify.getAccessories()) as { accessories: unknown[] };
   assert.equal(db.accessories.length, 1, 'pair-verify with the saved keys, then the bridge itself');
   await verify.close();
-  await stopProcess(second.child);
-  assert.equal(signPk(first.info.username), pk);
+  await stopProcess(third.child);
+  assert.equal(JSON.parse(keysFile(first.info.username)).signPk, JSON.parse(saved).signPk);
 });

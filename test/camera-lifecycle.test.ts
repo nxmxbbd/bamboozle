@@ -9,7 +9,7 @@ import fs, { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSy
 import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { PrepareStreamResponse } from 'hap-nodejs';
+import type { PrepareStreamResponse } from '@homebridge/hap-nodejs';
 import { PrinterCamera, SNAPSHOT_CACHE_SIZES, SNAPSHOT_QUEUE_LIMIT, type PrinterCameraOptions } from '../src/camera/camera.ts';
 import { STREAM_START, STREAM_STOP } from '../src/homekit/hap-constants.ts';
 

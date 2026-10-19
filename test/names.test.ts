@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Characteristic, Service } from 'hap-nodejs';
+import { Characteristic, Service } from '@homebridge/hap-nodejs';
 import { homeKitName, isValidHomeKitName } from '../src/homekit/names.ts';
 import { PrinterAccessories, type PrinterAccessoryOptions } from '../src/homekit/printer-accessory.ts';
 

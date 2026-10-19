@@ -9,7 +9,7 @@ import { EventEmitter } from 'node:events';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { encode, uuid } from 'hap-nodejs';
+import { encode, uuid } from '@homebridge/hap-nodejs';
 import { PrinterCamera, type PrinterCameraOptions } from '../src/camera/camera.ts';
 
 const dir = mkdtempSync(join(tmpdir(), 'bamboozle-hap-'));
