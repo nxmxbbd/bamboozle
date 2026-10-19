@@ -74,10 +74,57 @@ function assertWritable(dir: string): void {
   accessSync(existing, constants.W_OK);
 }
 
+/** The printer init --force replaces, as far as its values check out. */
+interface PreviousPrinter {
+  name?: string;
+  /** Upper case, trimmed: as the config parser reads it. */
+  serial?: string;
+  /** Only a source the parser accepts, so never one with credentials in it. */
+  cameraSource?: string;
+  model?: string;
+  port?: number;
+}
+
 /** What init --force keeps: every setting but the printers, and the one printer it replaces. */
 interface Kept {
   settings: Record<string, unknown>;
-  previous?: Record<string, unknown>;
+  previous?: PreviousPrinter;
+}
+
+/**
+ * The old printer's values that init --force may offer or keep, each checked
+ * by the real parser next to a stand-in printer. A value that fails is
+ * dropped, and said so without quoting it (a camera URL can hold the code).
+ */
+function previousPrinter(raw: Record<string, unknown>, dir: string, io: InitIO): PreviousPrinter {
+  const standIn = { name: 'x', host: 'x', serial: 'X', accessCode: 'x' };
+  const accepted = (extra: Record<string, unknown>) => {
+    try {
+      return parseConfig({ printers: [{ ...standIn, ...extra }] }, dir).printers[0];
+    } catch (error) {
+      if (!(error instanceof ConfigError)) throw error;
+      return undefined;
+    }
+  };
+  const previous: PreviousPrinter = {};
+  if (typeof raw['name'] === 'string' && raw['name'].trim() !== '') previous.name = raw['name'].trim();
+  if (typeof raw['serial'] === 'string') previous.serial = raw['serial'].trim().toUpperCase();
+  if (raw['camera'] !== undefined) {
+    const source = accepted({ camera: raw['camera'] })?.cameraSource;
+    if (source) previous.cameraSource = source;
+    else io.say('The old camera URL is not one bamboozle takes (a relay URL without credentials), so it is asked again.');
+  }
+  if (raw['model'] !== undefined) {
+    const model = accepted({ model: raw['model'] })?.model;
+    if (model !== undefined) previous.model = model;
+    else io.say('The old printer\'s model is not valid and will not be kept.');
+  }
+  if (raw['port'] !== undefined) {
+    const port = accepted({ port: raw['port'] })?.port;
+    if (port !== undefined) previous.port = port;
+    else io.say('The old printer\'s port is not valid and will not be kept.');
+  }
+  return previous;
 }
 
 /**
@@ -114,8 +161,8 @@ function keptSettings(configPath: string, io: InitIO): Kept | null {
     return leave(`The settings in ${configPath} do not work: ${error.message}`);
   }
   const first: unknown = Array.isArray(printers) ? printers[0] : undefined;
-  const previous = typeof first === 'object' && first !== null && !Array.isArray(first) ? (first as Record<string, unknown>) : undefined;
-  return previous ? { settings, previous } : { settings };
+  if (typeof first !== 'object' || first === null || Array.isArray(first)) return { settings };
+  return { settings, previous: previousPrinter(first as Record<string, unknown>, dirname(configPath), io) };
 }
 
 /** A typed serial, checked like the one from the certificate: it ends up in file names. */
@@ -187,11 +234,8 @@ export async function init(options: InitOptions, io: InitIO): Promise<number> {
     serial = await askSerial(io);
   }
   // With --force, the old printer's name and camera URL are the defaults.
-  const oldName = typeof previous?.['name'] === 'string' && previous['name'].trim() !== '' ? previous['name'].trim() : undefined;
-  const oldCamera = previous?.['camera'];
-  const oldSource = typeof oldCamera === 'object' && oldCamera !== null && typeof (oldCamera as Record<string, unknown>)['source'] === 'string'
-    ? ((oldCamera as Record<string, unknown>)['source'] as string)
-    : undefined;
+  const oldName = previous?.name;
+  const oldSource = previous?.cameraSource;
   const defaultName = oldName ?? DEFAULT_NAME;
   const name = options.name?.trim() || (await io.ask(`Name in the Home app [${defaultName}]: `)).trim() || defaultName;
   let camera: string;
@@ -203,9 +247,9 @@ export async function init(options: InitOptions, io: InitIO): Promise<number> {
 
   const printer: Record<string, unknown> = { name, host, serial };
   // The same printer keeps what init does not ask about.
-  if (previous && typeof previous['serial'] === 'string' && previous['serial'].toUpperCase() === serial) {
-    if (previous['model'] !== undefined) printer['model'] = previous['model'];
-    if (previous['port'] !== undefined) printer['port'] = previous['port'];
+  if (previous?.serial === serial) {
+    if (previous.model !== undefined) printer['model'] = previous.model;
+    if (previous.port !== undefined) printer['port'] = previous.port;
   }
   if (camera) printer['camera'] = { source: camera };
   // Check with the real parser before writing anything; an inline code stands in for the file.

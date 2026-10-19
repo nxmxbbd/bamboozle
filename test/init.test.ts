@@ -211,6 +211,34 @@ test('init --force checks the settings it keeps before asking anything', async (
   assert.ok(said.some((l) => l.includes('bridge.port')), said.join('\n'));
 });
 
+test('init --force never shows an old camera URL it would refuse (it may carry the access code)', async () => {
+  const opts = options();
+  mkdirSync(join(opts.configPath, '..'), { recursive: true });
+  const old = { name: 'P', host: '192.0.2.99', serial: '01P00A000000000', accessCode: 'oldcode1', camera: { source: 'rtsps://bblp:REVIEWSECRET1@192.0.2.99:322/streaming/live/1' } };
+  writeFileSync(opts.configPath, JSON.stringify({ printers: [old] }));
+  const { io, said, asked } = fakeIO(['192.0.2.10', '12345678', '', '']);
+  assert.equal(await init({ ...opts, force: true }, io), 0);
+  assert.ok(![...said, ...asked].some((l) => l.includes('REVIEWSECRET1')), [...said, ...asked].join('\n'));
+  assert.equal(loadConfig(opts.configPath).printers[0]?.cameraSource, undefined);
+});
+
+test('init --force keeps only a valid old model and port, says so up front, and matches a padded serial', async () => {
+  const opts = options();
+  mkdirSync(join(opts.configPath, '..'), { recursive: true });
+  writeFileSync(opts.configPath, JSON.stringify({ printers: [{ name: 'P', host: '192.0.2.99', serial: ' 01p00a000000000 ', accessCode: 'oldcode1', model: 'H2C', port: '8884' }] }));
+  const bad = fakeIO(['192.0.2.10', '12345678', '', '']);
+  assert.equal(await init({ ...opts, force: true }, bad.io), 0, 'an invalid old port does not fail the run after all questions');
+  assert.ok(bad.said.some((l) => l.includes('port') && l.includes('not be kept')), bad.said.join('\n'));
+  let printer = loadConfig(opts.configPath).printers[0];
+  assert.deepEqual([printer?.model, printer?.port], ['H2C', 8883], 'the padded serial still matched, so the model was kept');
+
+  writeFileSync(opts.configPath, JSON.stringify({ printers: [{ name: 'P', host: '192.0.2.99', serial: ' 01P00A000000000 ', accessCode: 'oldcode1', model: 'H2C', port: 8884 }] }));
+  const good = fakeIO(['192.0.2.10', '12345678', '', '']);
+  assert.equal(await init({ ...opts, force: true }, good.io), 0);
+  printer = loadConfig(opts.configPath).printers[0];
+  assert.deepEqual([printer?.model, printer?.port], ['H2C', 8884]);
+});
+
 test('init --force offers the old name and camera URL, and keeps model and port for the same printer', async () => {
   const opts = options();
   mkdirSync(join(opts.configPath, '..'), { recursive: true });
