@@ -32,7 +32,7 @@ export interface CameraConfig {
 export interface BridgeConfig {
   name: string;
   port: number;
-  /** Interfaces or addresses to serve and advertise on; all when absent. */
+  /** Interfaces or addresses to advertise on (the HAP server itself listens on all); all when absent. */
   bind?: string[];
 }
 

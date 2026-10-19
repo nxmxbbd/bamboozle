@@ -89,7 +89,7 @@ Everything bamboozle knows lives in `data/`: the config, the access code and the
 A few details:
 
 - **Whose `data/` is it?** The container runs as uid 1000, the first user on most Linux machines. If `id -u` says something else, run the container as yourself: add `user: "1001:1001"` (your `id -u` and `id -g`) to the bamboozle service. If `data/` is not writable, `init` says so before asking anything. (Tempted by `chmod 777 data`? `init` refuses that one: anybody on the machine could swap your pairing keys.)
-- **Hardware encoding (Intel GPU):** uncomment `devices` and `group_add` in `compose.yaml`, put in the id of the group that owns the GPU (`getent group render | cut -d: -f3`), and set `"camera": { "encoder": "vaapi" }` in `data/config.json`.
+- **Hardware encoding (Intel GPU):** uncomment `devices` and `group_add` in `compose.yaml`, put in the id of the group that owns the GPU (`getent group render | cut -d: -f3`), and add `"camera": { "encoder": "vaapi" }` to `data/config.json`, at the top level next to `"printers"` (not inside a printer).
 - **Already running go2rtc?** The sidecar wants the same RTSP port (8554). Remove the go2rtc service and give `init` the RTSP URL of the one you have.
 
 ### npm
@@ -122,7 +122,7 @@ Two commands. You have survived worse. From a checkout, `node src/cli.ts` plays 
 
 You need two things from the printer's touchscreen, both in its network / LAN settings: the IP address and the LAN access code. Writing the config by hand? Grab the serial number too.
 
-The access code belongs in a file, not on a command line where your shell might remember it, and not in the config where you might accidentally commit it. `init` takes care of that. Doing it yourself:
+The access code belongs in a file, not on a command line where your shell might remember it, and not in the config where you might accidentally commit it. `init` takes care of that. Doing it yourself, in bash:
 
 ```sh
 (umask 077; read -rsp 'Access code: ' code && printf '%s' "$code" > printer.code)
@@ -207,7 +207,7 @@ Want to see how it looks before printing anything? `serve --simulate` feeds a si
 
 ## Run it for real
 
-Once you're happy with the tiles, make it permanent. Here is an example systemd unit that puts the code in `/opt/bamboozle` and the config, access-code file and pairing state in `/var/lib/bamboozle`, owned by a dedicated `bamboozle` system user (add it to the `render` group if you use VAAPI):
+Once you're happy with the tiles, make it permanent. Here is an example systemd unit that puts the code in `/opt/bamboozle` and the config, access-code file and pairing state in `/var/lib/bamboozle`, owned by a dedicated `bamboozle` system user (uncomment `SupplementaryGroups` if you use VAAPI):
 
 ```ini
 [Unit]
@@ -218,7 +218,8 @@ After=network-online.target
 [Service]
 User=bamboozle
 Group=bamboozle
-SupplementaryGroups=render
+# For VAAPI (the render device's group):
+# SupplementaryGroups=render
 WorkingDirectory=/opt/bamboozle
 ExecStart=/usr/bin/node src/cli.ts serve --config /var/lib/bamboozle/config.json
 StateDirectory=bamboozle
@@ -245,7 +246,7 @@ Keep `storagePath` when you move or upgrade bamboozle. It holds the bridge's ide
 
 **"No Response" on every tile.** Either bamboozle cannot reach the printer (while the printer is unavailable, every tile reports "No Response"), or the Home app cannot reach bamboozle. Run `probe` first (`docker compose run --rm bamboozle probe` in Docker): if it fails, it's the printer side. If `probe` works and the tiles still say "No Response", the Home app can't get to the bridge: see [Network and firewall](#network-and-firewall).
 
-**The camera tile stays blank.** Make sure the relay is running and reachable at the URL in `camera.source` (in Docker, `docker compose logs go2rtc` shows whether it reaches the printer). bamboozle needs ffmpeg on PATH (or set `camera.ffmpeg` to the full path). For VAAPI encoding, the bamboozle user needs access to the render device (`/dev/dri/renderD128` by default).
+**The camera tile stays blank.** Make sure the relay is running and reachable at the URL in `printers[].camera.source` (in Docker, `docker compose logs go2rtc` shows whether it reaches the printer). bamboozle needs ffmpeg on PATH (or set `camera.ffmpeg` to the full path). For VAAPI encoding, the bamboozle user needs access to the render device (`/dev/dri/renderD128` by default).
 
 **"Cannot write to /data (EACCES, running as uid 1000)".** Docker's `data/` folder is not writable for the container's user, usually because Docker created it as root. See **Whose `data/` is it?** under [Docker Compose](#docker-compose).
 

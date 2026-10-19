@@ -78,7 +78,7 @@ export function loadOrCreateIdentity(storagePath: string): BridgeIdentity {
 export interface BridgeOptions {
   name: string;
   port: number;
-  /** Interfaces or addresses to serve and advertise on; all when undefined. */
+  /** Interfaces or addresses to advertise on (hap-nodejs always listens on all); all when undefined. */
   bind?: string[];
   storagePath: string;
 }
