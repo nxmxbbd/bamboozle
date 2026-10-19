@@ -250,7 +250,7 @@ Keep `storagePath` when you move or upgrade bamboozle. It holds the bridge's ide
 
 ## Troubleshooting
 
-**"No Response" on every tile.** Either bamboozle cannot reach the printer (while the printer is unavailable, every tile reports "No Response"), or the Home app cannot reach bamboozle. Run `probe` first (`docker compose run --rm bamboozle probe` in Docker): if it fails, it's the printer side. If `probe` works and the tiles still say "No Response", the Home app can't get to the bridge: see [Network and firewall](#network-and-firewall).
+**"No Response" on every tile.** Either bamboozle cannot reach the printer (while the printer is unavailable, every tile reports "No Response"), or the Home app cannot reach bamboozle. Run `probe` first (`docker compose run --rm bamboozle probe` in Docker): if it fails, it's the printer side. If `probe` works and the tiles still say "No Response", the Home app can't get to the bridge: see [Network and firewall](#network-and-firewall). One more case: if bamboozle shows the pairing code at start (it thinks it was never paired) while the Home app still lists the bridge, its pairing keys are gone. bamboozle 0.1.0 could lose them when the disk filled up. Restore `storage/hap/` from a backup, or remove the bridge from the Home app and add it again (the setup code stays the same).
 
 **The camera tile stays blank.** Make sure the relay is running and reachable at the URL in `printers[].camera.source` (in Docker, `docker compose logs go2rtc` shows whether it reaches the printer). bamboozle needs ffmpeg on PATH (or set `camera.ffmpeg` to the full path). For VAAPI encoding, the bamboozle user needs access to the render device (`/dev/dri/renderD128` by default).
 
