@@ -6,7 +6,7 @@ import { findLeaks, sanitize } from '../scripts/sanitize-report.ts';
 const dir = new URL('./fixtures/', import.meta.url);
 
 test('committed fixtures contain no serials or real addresses', () => {
-  const files = readdirSync(dir).filter((name) => name.endsWith('.json'));
+  const files = readdirSync(dir, { recursive: true, encoding: 'utf8' }).filter((name) => name.endsWith('.json'));
   assert.ok(files.length > 0);
   for (const name of files) {
     assert.deepEqual(findLeaks(readFileSync(new URL(name, dir), 'utf8')), [], name);
