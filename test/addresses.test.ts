@@ -4,7 +4,9 @@
 // this one covers everything a person writes by hand.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readdirSync, readFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { existsSync, readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { IPV4 } from '../scripts/sanitize-report.ts';
 
 const root = new URL('../', import.meta.url);
@@ -23,23 +25,26 @@ const allowed = (ip: string) =>
   ip.startsWith('198.51.100.') ||
   ip.startsWith('203.0.113.');
 
+/** Every file a push would publish: the tracked ones and new ones git does not ignore. */
 function files(): string[] {
-  const out = ['README.md'];
-  for (const dir of ['src', 'test', 'scripts']) {
-    for (const name of readdirSync(new URL(`${dir}/`, root), { recursive: true }) as string[]) {
-      if (/\.(ts|json|md)$/.test(name)) out.push(`${dir}/${name}`);
-    }
-  }
-  return out;
+  const list = execFileSync('git', ['ls-files', '--cached', '--others', '--exclude-standard', '-z'], { cwd: fileURLToPath(root), encoding: 'utf8' });
+  return list.split('\0').filter((name) => name !== '' && existsSync(new URL(name, root)));
 }
+
+/** Git's own test: a NUL byte near the start means binary. */
+const isBinary = (bytes: Buffer) => bytes.subarray(0, 8000).includes(0);
 
 test('hand-written files use only loopback or documentation IPv4 addresses', () => {
   const list = files();
   assert.ok(list.includes('test/peer.test.ts'), 'the walk reaches the tests');
+  for (const file of ['.gitignore', 'tsconfig.json', 'docker/go2rtc.yaml', 'Dockerfile']) {
+    assert.ok(list.includes(file), `the walk reaches ${file}`);
+  }
   const found: string[] = [];
   for (const file of list) {
-    const text = readFileSync(new URL(file, root), 'utf8');
-    for (const match of text.matchAll(IPV4)) {
+    const bytes = readFileSync(new URL(file, root));
+    if (isBinary(bytes)) continue;
+    for (const match of bytes.toString('utf8').matchAll(IPV4)) {
       if (!allowed(match[0]) && !EXEMPT[file]?.includes(match[0])) found.push(`${file}: ${match[0]}`);
     }
   }
