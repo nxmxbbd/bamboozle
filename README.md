@@ -116,7 +116,7 @@ git clone https://github.com/nxmxbbd/bamboozle.git && cd bamboozle
 npm ci --omit=dev
 ```
 
-Two commands. You have survived worse. From a checkout, `node src/cli.ts` plays the part of the `bamboozle` command (TypeScript runs directly via type stripping).
+Two commands. You have survived worse. From a checkout, `node src/cli.ts` plays the part of the `bamboozle` command (TypeScript runs directly via type stripping). To update, run both `git pull` and `npm ci --omit=dev`: dependencies change between versions (0.2.0 swapped the HomeKit library), and a pull alone does not install them.
 
 ## Printer prep
 
