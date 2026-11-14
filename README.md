@@ -20,7 +20,7 @@ Not a fan of the fan? You can show progress as a window blind, a lightbulb or a 
 
 ### The camera
 
-When you point bamboozle at a video relay (more on that below), the Home app gets a camera tile with a status overlay: state, progress, time left, estimated finish time, layer count and temperatures, drawn over the live stream, plus a warning pill when the printer reports an HMS message or a print error. The overlay leaves the bottom-left corner free so the Home app can draw its own snapshot age label there.
+When you point bamboozle at a video relay (more on that below), the Home app gets a camera tile with a status overlay: state, progress, time left, estimated finish time, layer count and temperatures, drawn over the live stream, plus a warning pill when the printer reports an HMS message or a print error (with what the code means, once you [download the texts](#what-the-codes-mean)). The overlay leaves the bottom-left corner free so the Home app can draw its own snapshot age label there.
 
 ![The Home app while printing and after the print: sensors, the camera tile with its overlay, and the progress fan](docs/home.webp)
 
@@ -160,6 +160,29 @@ Running go2rtc yourself, without the compose file? Start it the same way, with t
 ```sh
 go2rtc -config go2rtc.yaml -config '{"api":{"listen":""},"rtsp":{"listen":"127.0.0.1:8554"},"webrtc":{"listen":""},"srtp":{"listen":""}}'
 ```
+
+### What the codes mean
+
+The warning pill shows the code the printer reports, like `ERROR 0C00_8040`. That is precise, and tells you nothing at a glance. Bambu publishes an English text for most codes, per printer model, and bamboozle can put it in a box under the pill:
+
+```sh
+bamboozle error-texts                              # npm or from source
+docker compose run --rm bamboozle error-texts      # Docker Compose
+```
+
+This downloads the texts for every printer model in your config from Bambu's server (`e.bambulab.com`) into `storage/error-texts/`. It is the only thing in bamboozle that talks to the internet, and it only runs when you run it: the bridge reads the saved files and never fetches anything. Bambu adds codes with new firmware, so run it again now and then. The bridge notices new files within a minute; no restart needed.
+
+Some codes have no text, because Bambu keeps them to itself (the overlay then shows the code alone, as before). To fill those in, or to replace a text you don't like, write `storage/error-texts/custom.json`:
+
+```json
+{
+  "0C00_0300_0002_ABCD": "Your own words for this HMS code",
+  "0C00_1234": "And for this print error",
+  "0300_0100_0001_0007": ""
+}
+```
+
+Keys are HMS codes (16 hex digits) or print errors (8), with or without the underscores. An empty text hides Bambu's for that code. Your texts count for every printer. The overlay font has Latin letters only, so write them in English (or anything else that uses the plain Latin alphabet).
 
 ## Configure and pair
 
@@ -312,7 +335,7 @@ Not tested yet. The short version: mDNS stays in one subnet, so put bamboozle wi
 | `printers[].model` | `3D printer` | Model shown in the Home app |
 | `printers[].listenOnly` | `false` | `true`: publish nothing to this printer, not even the status request; bamboozle only connects and listens (see [Security notes](#security-notes)) |
 | `printers[].camera.source` | none | `rtsp://`, `rtsps://`, `http://`, `https://` URL without credentials, an absolute file path, or `lavfi:<graph>` |
-| `storagePath` | `storage` | Pairing keys, bridge identity and printer certificate pins |
+| `storagePath` | `storage` | Pairing keys, bridge identity, printer certificate pins and [error texts](#what-the-codes-mean) |
 | `bridge.name` | `bamboozle` | Bridge name in the Home app |
 | `bridge.port` | `51827` | HomeKit (HAP) TCP port |
 | `bridge.bind` | all | Interfaces or addresses to advertise on |
@@ -331,6 +354,7 @@ Not tested yet. The short version: mDNS stays in one subnet, so put bamboozle wi
 ## Security notes
 
 - The printer's TLS certificate is pinned on first contact (`storage/pins/<serial>.sha256`), and nothing is sent before the pin matches. If the printer gets a new certificate (factory reset, board replacement), delete the pin file to trust the new one.
+- The bridge itself never talks to the internet. `bamboozle error-texts` does, when you run it: it asks `e.bambulab.com` for the texts of your printer models (the first three characters of each serial, from your IP address) and sends nothing else.
 - The access code is never logged and never put on a command line. Keep the config file and `accessCodeFile` readable only by bamboozle.
 - bamboozle only reads the printer's status. It asks for one full report per connection and sends no other commands. Want it to not even ask? Set `"listenOnly": true` on that printer: bamboozle then publishes nothing to it and just listens (it still logs in, subscribes to the reports and sends keep-alive pings). This only works with a printer whose reports are complete on their own; one that reports only what changed will sit on "No Response", waiting for a question nobody asks. A first `init` checks the connection with one status request (`init --force` on a printer that is already listen-only does not), so for a printer that must never get one, write the config by hand.
 
