@@ -49,9 +49,47 @@ function publishPacket(topic: string, payload: Buffer): Buffer {
   return Buffer.concat([Buffer.from([0x30, ...length]), nameLength, name, payload]);
 }
 
+interface Login {
+  username: string | null;
+  password: string | null;
+}
+
+/** User name and password of a CONNECT packet (MQTT 3.1.1); null for one the packet does not carry. */
+function login(body: Buffer): Login {
+  const flags = body[7] ?? 0;
+  let at = 10; // protocol name, level, flags and keep-alive come first
+  const text = () => {
+    const length = body.readUInt16BE(at);
+    at += 2 + length;
+    return body.subarray(at - length, at).toString();
+  };
+  text(); // the client id
+  if (flags & 0x04) {
+    text(); // a will: its topic
+    text(); // and its message
+  }
+  return { username: flags & 0x80 ? text() : null, password: flags & 0x40 ? text() : null };
+}
+
+/** The topic filters of a SUBSCRIBE packet. */
+function topicFilters(body: Buffer): string[] {
+  const filters: string[] = [];
+  // After the packet id: each filter is followed by the QoS asked for.
+  for (let at = 2; at + 2 <= body.length; ) {
+    const length = body.readUInt16BE(at);
+    filters.push(body.subarray(at + 2, at + 2 + length).toString());
+    at += 2 + length + 1;
+  }
+  return filters;
+}
+
 export interface Seen {
   /** Type of every packet the client sent, in order. */
   types: number[];
+  /** What the client logged in with, once per connection. */
+  logins: Login[];
+  /** Every topic filter the client subscribed to, in order. */
+  subscriptions: string[];
   publishes: Array<{ topic: string; payload: string }>;
   /** Bytes the client sent that never made a whole packet: must stay 0, or a packet went unread. */
   unparsed: number;
@@ -87,7 +125,7 @@ const HUNG_UP_WITHIN_MS = 10_000;
 
 export interface FakePrinterOptions {
   identity: TlsIdentity;
-  /** Names the topics: reports go out on device/<serial>/report. */
+  /** Names the topics: reports go out on device/<serial>/report, to a client that subscribed to exactly that. */
   serial: string;
   /** The full report it sends, once per connection. */
   report: Buffer;
@@ -107,7 +145,8 @@ export interface FakePrinter {
 
 /** A printer's MQTT side: accepts the connection and the subscription, and sends one full report. */
 export function fakePrinter({ identity, serial, report: fullReport, behaviour }: FakePrinterOptions): Promise<FakePrinter> {
-  const seen: Seen = { types: [], publishes: [], unparsed: 0 };
+  const seen: Seen = { types: [], logins: [], subscriptions: [], publishes: [], unparsed: 0 };
+  const reportTopic = `device/${serial}/report`;
   // Raw connections count from the TCP accept, so a client that gives up during the TLS handshake still hangs up.
   const open = new Set<Socket>();
   const timers = new Set<NodeJS.Timeout>();
@@ -120,18 +159,28 @@ export function fakePrinter({ identity, serial, report: fullReport, behaviour }:
   const server = createServer(identity, (socket) => {
     open.add(socket);
     let buffer = Buffer.alloc(0);
+    // As with a broker: a client that did not subscribe to the report topic gets no report.
+    let subscribed = false;
     const report = () => {
-      if (!socket.destroyed) socket.write(publishPacket(`device/${serial}/report`, fullReport));
+      if (subscribed && !socket.destroyed) socket.write(publishPacket(reportTopic, fullReport));
     };
     socket.on('data', (data) => {
       buffer = Buffer.concat([buffer, data]);
       for (let packet = takePacket(buffer); packet; packet = takePacket(buffer)) {
         buffer = buffer.subarray(packet.length);
         seen.types.push(packet.type);
-        if (packet.type === CONNECT) socket.write(Buffer.from([0x20, 0x02, 0x00, 0x00]));
+        if (packet.type === CONNECT) {
+          seen.logins.push(login(packet.body));
+          socket.write(Buffer.from([0x20, 0x02, 0x00, 0x00]));
+        }
         if (packet.type === SUBSCRIBE) {
+          const filters = topicFilters(packet.body);
+          seen.subscriptions.push(...filters);
           socket.write(Buffer.from([0x90, 0x03, packet.body[0] as number, packet.body[1] as number, 0x00]));
-          if (behaviour === 'reports unasked') timers.add(setTimeout(report, UNASKED_REPORT_AFTER_MS));
+          if (filters.includes(reportTopic)) {
+            subscribed = true;
+            if (behaviour === 'reports unasked') timers.add(setTimeout(report, UNASKED_REPORT_AFTER_MS));
+          }
         }
         if (packet.type === PUBLISH) {
           const topicLength = packet.body.readUInt16BE(0);
