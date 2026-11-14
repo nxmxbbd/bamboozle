@@ -154,22 +154,38 @@ export function formatDuration(minutes: number): string {
   return `${mins}m`;
 }
 
-function clock(date: Date, timeZone: string | undefined): string {
-  return new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false, ...(timeZone ? { timeZone } : {}) }).format(date);
+interface ClockFormats {
+  time: Intl.DateTimeFormat;
+  day: Intl.DateTimeFormat;
+  weekday: Intl.DateTimeFormat;
 }
 
-function day(date: Date, timeZone: string | undefined): string {
-  return new Intl.DateTimeFormat('en-CA', { year: 'numeric', month: '2-digit', day: '2-digit', ...(timeZone ? { timeZone } : {}) }).format(date);
-}
+// Built once per time zone and kept, never per status report: a formatter
+// thrown away holds about 25 KB outside the JavaScript heap until a full
+// garbage collection, which a quiet bridge almost never runs. The bridge asks
+// for one zone only: the configured one, or the host's as it was at first use.
+const clockFormats = new Map<string, ClockFormats>();
 
-function weekday(date: Date, timeZone: string | undefined): string {
-  return new Intl.DateTimeFormat('en-US', { weekday: 'short', ...(timeZone ? { timeZone } : {}) }).format(date).toUpperCase();
+function formatsFor(timeZone: string | undefined): ClockFormats {
+  const key = timeZone || '';
+  let formats = clockFormats.get(key);
+  if (!formats) {
+    const zone = timeZone ? { timeZone } : {};
+    formats = {
+      time: new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false, ...zone }),
+      day: new Intl.DateTimeFormat('en-CA', { year: 'numeric', month: '2-digit', day: '2-digit', ...zone }),
+      weekday: new Intl.DateTimeFormat('en-US', { weekday: 'short', ...zone }),
+    };
+    clockFormats.set(key, formats);
+  }
+  return formats;
 }
 
 /** "05:18" today, "TUE 05:18" on another day. */
 export function formatClock(target: Date, now: Date, timeZone?: string): string {
-  const time = clock(target, timeZone);
-  return day(target, timeZone) === day(now, timeZone) ? time : `${weekday(target, timeZone)} ${time}`;
+  const { time, day, weekday } = formatsFor(timeZone);
+  const clock = time.format(target);
+  return day.format(target) === day.format(now) ? clock : `${weekday.format(target).toUpperCase()} ${clock}`;
 }
 
 function bar(fraction: number): string {

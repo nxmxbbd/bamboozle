@@ -117,6 +117,31 @@ test('formatDuration and formatClock', () => {
   assert.equal(formatClock(new Date('2026-10-19T04:58:00+08:00'), now, 'America/Los_Angeles'), '13:58');
 });
 
+// A printer reports about once a second for as long as it prints, and every
+// report becomes overlay text. What that builds per report must not outlive
+// it: a date formatter does, its memory lies outside the JavaScript heap and
+// comes back only at a full garbage collection.
+test('a long print does not grow the process: every way the overlay shows a clock time', () => {
+  const REPORTS = 4000;
+  const LIMIT_MB = 32;
+  const hostZone: Omit<OverlayInput, 'status'> = { available: true, name: 'H2C', now, finishedAt: null };
+  const cases: Array<[string, (i: number) => OverlayInput]> = [
+    ['ETA today', (i) => ({ ...base, status: { ...clean, remainingMinutes: 1 + (i % 60) } })],
+    ['ETA on another day', (i) => ({ ...base, status: { ...clean, remainingMinutes: 1440 + (i % 60) } })],
+    ['finished, with the time it finished', (i) => ({ ...base, status: { ...clean, state: 'finished' }, finishedAt: new Date(now.getTime() - i * 1000) })],
+    ["ETA in the host's time zone", (i) => ({ ...hostZone, status: { ...clean, remainingMinutes: 1 + (i % 60) } })],
+  ];
+  const grew: string[] = [];
+  for (const [name, input] of cases) {
+    overlayContent(input(0)); // what is built once is built here
+    const before = process.memoryUsage.rss();
+    for (let i = 0; i < REPORTS; i++) overlayContent(input(i));
+    const grownMb = Math.round((process.memoryUsage.rss() - before) / 1024 / 1024);
+    if (grownMb >= LIMIT_MB) grew.push(`${name}: ${grownMb} MB`);
+  }
+  assert.deepEqual(grew, [], `${REPORTS} reports each may grow the process by less than ${LIMIT_MB} MB`);
+});
+
 test('every layer file is unique, and the filter draws every layer', () => {
   const dir = mkdtempSync(join(tmpdir(), 'bamboozle-ovl-'));
   try {
