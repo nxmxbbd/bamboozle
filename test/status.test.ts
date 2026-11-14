@@ -56,6 +56,31 @@ test('H2C failed with Developer Mode on; second extruder active', () => {
   assert.deepEqual(status.bed, { current: 27, target: 0 });
 });
 
+test('H3C printing; the flat nozzle fields disagree with the extruder entry', () => {
+  const report = fixture('h3c-printing');
+  const status = parseStatus(report);
+  assert.equal(status.state, 'printing');
+  assert.equal(status.gcodeState, 'RUNNING');
+  assert.equal(status.progress, 78);
+  assert.equal(status.remainingMinutes, 99);
+  assert.equal(status.layer, 122);
+  assert.equal(status.totalLayers, 238);
+  // One extruder entry; extruder.state 1 -> bits 4-7 = 0.
+  assert.deepEqual(status.nozzles, [{ id: 0, current: 245, target: 245 }]);
+  assert.equal(status.activeNozzleId, 0);
+  // The flat fields are in this report too, and read 215 / 169.
+  const print = report['print'] as JsonObject;
+  assert.equal(print['nozzle_temper'], 215);
+  assert.equal(print['nozzle_target_temper'], 169);
+  assert.deepEqual(status.nozzle, { current: 245, target: 245 });
+  assert.deepEqual(status.bed, { current: 70, target: 70 });
+  assert.deepEqual(status.chamber, { current: 39, target: 0 });
+  assert.equal(status.chamberLight, true);
+  assert.deepEqual(status.hms, []);
+  assert.equal(status.printError, 0);
+  assert.equal(status.signatureRequired, true);
+});
+
 test('accepts the bare print object as well as the wrapped message', () => {
   const wrapped = fixture('h2c-printing');
   assert.deepEqual(parseStatus(wrapped['print'] as JsonObject), parseStatus(wrapped));

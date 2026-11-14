@@ -20,6 +20,14 @@ test('a full report completes the status; later deltas update it', () => {
   assert.deepEqual(next.chamber, { current: 59, target: 60 });
 });
 
+test('an H3C report, as the printer sends it unasked, is a full report by itself', () => {
+  const acc = new ReportAccumulator();
+  const status = acc.handle(readFileSync(new URL('./fixtures/h3c-printing.json', import.meta.url), 'utf8'));
+  assert.equal(acc.complete, true);
+  assert.equal(status?.state, 'printing');
+  assert.equal(status?.progress, 78);
+});
+
 test('deltas before any full report do not mark the status complete', () => {
   const acc = new ReportAccumulator();
   const status = acc.handle(JSON.stringify({ print: { command: 'push_status', mc_percent: 5 } }));
