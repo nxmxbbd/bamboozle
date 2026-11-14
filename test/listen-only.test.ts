@@ -5,16 +5,15 @@
 
 import { test, before, after, type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { createServer as createTcpServer, type AddressInfo, type Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createServer } from 'node:tls';
 import { ConfigError, parseConfig } from '../src/config.ts';
 import { PrinterClient, type MqttFactory, type PrinterConnection } from '../src/printer/client.ts';
 import { probePrinters } from '../src/probe.ts';
+import { CONNECT, SUBSCRIBE, fakePrinter, sent, tlsIdentity, type Behaviour, type FakePrinter, type TlsIdentity } from './support/fake-printer.ts';
 
 const FULL_REPORT = readFileSync(new URL('./fixtures/h2c-printing.json', import.meta.url));
 const CONNECTION: PrinterConnection = { name: 'Printer', host: '192.0.2.10', port: 8883, serial: 'S1', accessCode: 'a' };
@@ -97,154 +96,21 @@ test('listenOnly is true or false in the config; a printer without it is asked a
 
 // --- on the wire -------------------------------------------------------------
 
-const CONNECT = 1;
-const PUBLISH = 3;
-const SUBSCRIBE = 8;
-const PINGREQ = 12;
-const DISCONNECT = 14;
-
-interface Packet {
-  type: number;
-  body: Buffer;
-  length: number;
-}
-
-/** The first whole MQTT packet in the buffer, or null while it is incomplete. */
-function takePacket(buffer: Buffer): Packet | null {
-  let remaining = 0;
-  let index = 1;
-  for (let shift = 0; ; shift += 7) {
-    const byte = buffer[index++];
-    if (byte === undefined) return null;
-    remaining |= (byte & 0x7f) << shift;
-    if ((byte & 0x80) === 0) break;
-  }
-  if (buffer.length < index + remaining) return null;
-  return { type: (buffer[0] as number) >> 4, body: buffer.subarray(index, index + remaining), length: index + remaining };
-}
-
-/** A QoS 0 PUBLISH packet. */
-function publishPacket(topic: string, payload: Buffer): Buffer {
-  const name = Buffer.from(topic);
-  const length: number[] = [];
-  let remaining = 2 + name.length + payload.length;
-  do {
-    const byte = remaining % 128;
-    remaining = Math.floor(remaining / 128);
-    length.push(remaining > 0 ? byte | 0x80 : byte);
-  } while (remaining > 0);
-  const nameLength = Buffer.alloc(2);
-  nameLength.writeUInt16BE(name.length);
-  return Buffer.concat([Buffer.from([0x30, ...length]), nameLength, name, payload]);
-}
-
-interface Seen {
-  /** Type of every packet the client sent, in order. */
-  types: number[];
-  publishes: Array<{ topic: string; payload: string }>;
-  /** Bytes the client sent that never made a whole packet: must stay 0, or a packet went unread. */
-  unparsed: number;
-}
-
-type Behaviour = 'reports unasked' | 'answers when asked';
-
 let dir = '';
-let identity: { key: string; cert: string } | null = null;
+let identity: TlsIdentity | null = null;
 before(() => {
   dir = mkdtempSync(join(tmpdir(), 'bamboozle-listen-'));
-  try {
-    const key = join(dir, 'printer.key');
-    const cert = join(dir, 'printer.crt');
-    execFileSync('openssl', ['req', '-x509', '-newkey', 'ec', '-pkeyopt', 'ec_paramgen_curve:prime256v1', '-nodes',
-      '-keyout', key, '-out', cert, '-days', '1', '-subj', '/CN=S1'], { stdio: 'ignore' });
-    identity = { key: readFileSync(key, 'utf8'), cert: readFileSync(cert, 'utf8') };
-  } catch {
-    identity = null; // no openssl: the wire tests are skipped
-  }
+  identity = tlsIdentity(dir, 'S1'); // null without openssl: the wire tests are skipped
 });
 after(() => rmSync(dir, { recursive: true, force: true }));
 
-// A printer reports about once a second. The unasked report waits this long
-// after the subscription, so a request the client was going to send is on the
-// wire before the report lets the probe hang up (sent at once, the report won
-// that race and a client that did ask looked silent).
-const UNASKED_REPORT_AFTER_MS = 300;
-// A client that never connects, or never hangs up, fails the test instead of hanging it.
-const HUNG_UP_WITHIN_MS = 10_000;
 const WIRE_TEST = { timeout: 30_000 };
 
-interface FakePrinter {
-  port: number;
-  seen: Seen;
-  /** Resolves once the client has connected and every connection has closed: all it sent has been read by then. */
-  hungUp(): Promise<void>;
-}
-
-/** A printer's MQTT side: accepts the connection and the subscription, and sends one full report. */
-function fakePrinter(t: TestContext, behaviour: Behaviour): Promise<FakePrinter> {
-  const seen: Seen = { types: [], publishes: [], unparsed: 0 };
-  // Raw connections count from the TCP accept, so a client that gives up during the TLS handshake still hangs up.
-  const open = new Set<Socket>();
-  const timers = new Set<NodeJS.Timeout>();
-  let connections = 0;
-  const waiting: Array<() => void> = [];
-  const closed = (socket: Socket) => {
-    open.delete(socket);
-    if (open.size === 0) for (const done of waiting.splice(0)) done();
-  };
-  const server = createServer(identity as { key: string; cert: string }, (socket) => {
-    open.add(socket);
-    let buffer = Buffer.alloc(0);
-    const report = () => {
-      if (!socket.destroyed) socket.write(publishPacket('device/S1/report', FULL_REPORT));
-    };
-    socket.on('data', (data) => {
-      buffer = Buffer.concat([buffer, data]);
-      for (let packet = takePacket(buffer); packet; packet = takePacket(buffer)) {
-        buffer = buffer.subarray(packet.length);
-        seen.types.push(packet.type);
-        if (packet.type === CONNECT) socket.write(Buffer.from([0x20, 0x02, 0x00, 0x00]));
-        if (packet.type === SUBSCRIBE) {
-          socket.write(Buffer.from([0x90, 0x03, packet.body[0] as number, packet.body[1] as number, 0x00]));
-          if (behaviour === 'reports unasked') timers.add(setTimeout(report, UNASKED_REPORT_AFTER_MS));
-        }
-        if (packet.type === PUBLISH) {
-          const topicLength = packet.body.readUInt16BE(0);
-          seen.publishes.push({ topic: packet.body.subarray(2, 2 + topicLength).toString(), payload: packet.body.subarray(2 + topicLength).toString() });
-          if (behaviour === 'answers when asked') report();
-        }
-        if (packet.type === PINGREQ) socket.write(Buffer.from([0xd0, 0x00]));
-      }
-    });
-    socket.on('error', () => {});
-    socket.on('close', () => {
-      seen.unparsed += buffer.length;
-      closed(socket);
-    });
-  });
-  server.on('connection', (raw: Socket) => {
-    connections += 1;
-    open.add(raw);
-    raw.on('close', () => closed(raw));
-  });
-  t.after(() => {
-    for (const timer of timers) clearTimeout(timer);
-    for (const socket of open) socket.destroy();
-    server.close();
-  });
-  const hungUp = () =>
-    new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error(`the client did not connect and hang up within ${HUNG_UP_WITHIN_MS / 1000} s`)), HUNG_UP_WITHIN_MS);
-      const done = () => {
-        clearTimeout(timer);
-        resolve();
-      };
-      if (connections > 0 && open.size === 0) done();
-      else waiting.push(done);
-    });
-  return new Promise((resolve) => {
-    server.listen(0, '127.0.0.1', () => resolve({ port: (server.address() as AddressInfo).port, seen, hungUp }));
-  });
+/** A fake printer with serial S1 that sends the H2C report; gone with the test. */
+async function printerS1(t: TestContext, behaviour: Behaviour): Promise<FakePrinter> {
+  const printer = await fakePrinter({ identity: identity as TlsIdentity, serial: 'S1', report: FULL_REPORT, behaviour });
+  t.after(() => printer.close());
+  return printer;
 }
 
 let run = 0;
@@ -256,12 +122,9 @@ function probe(port: number, extra: Record<string, unknown>, timeoutSeconds: num
   return probePrinters(config, timeoutSeconds, { error: () => {} });
 }
 
-/** What the client sent besides keep-alive pings and a goodbye. */
-const sent = (seen: Seen) => seen.types.filter((type) => type !== PINGREQ && type !== DISCONNECT);
-
 test('on the wire, a listen-only printer gets a connection and a subscription and no publish', WIRE_TEST, async (t) => {
   if (!identity) return t.skip('openssl not available');
-  const printer = await fakePrinter(t, 'reports unasked');
+  const printer = await printerS1(t, 'reports unasked');
   const [result] = await probe(printer.port, { listenOnly: true }, 10);
   await printer.hungUp();
   assert.equal(result?.ok, true, 'its own report is enough');
@@ -273,7 +136,7 @@ test('on the wire, a listen-only printer gets a connection and a subscription an
 
 test('on the wire, any other printer gets exactly one status request', WIRE_TEST, async (t) => {
   if (!identity) return t.skip('openssl not available');
-  const printer = await fakePrinter(t, 'answers when asked');
+  const printer = await printerS1(t, 'answers when asked');
   const [result] = await probe(printer.port, {}, 10);
   await printer.hungUp();
   assert.equal(result?.ok, true, 'the request was sent and answered');
@@ -285,7 +148,7 @@ test('on the wire, any other printer gets exactly one status request', WIRE_TEST
 
 test('on the wire, a listen-only printer that waits to be asked is left alone: no status, and still no publish', WIRE_TEST, async (t) => {
   if (!identity) return t.skip('openssl not available');
-  const printer = await fakePrinter(t, 'answers when asked');
+  const printer = await printerS1(t, 'answers when asked');
   // Three seconds: room to connect and subscribe on a slow machine, then silence until the probe gives up.
   const [result] = await probe(printer.port, { listenOnly: true }, 3);
   await printer.hungUp();
