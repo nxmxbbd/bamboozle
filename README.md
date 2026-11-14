@@ -2,7 +2,7 @@
 
 Your Bambu Lab printer, in Apple Home. No cloud, no Home Assistant, no Homebridge. Just one small process on your network, telling HomeKit a few white lies.
 
-> **Status:** early, and look-but-don't-touch: bamboozle shows your printer in Home but doesn't control it ([no controls yet](#no-controls-yet)). Tested with an H2C. Other models (X1, P1, A1) send the same report format and should work, but are untested.
+> **Status:** early, and look-but-don't-touch: bamboozle shows your printer in Home but doesn't control it ([no controls yet](#no-controls-yet)). Tested with an H2C and an H3C (the H3C only as a [listen-only](#security-notes) printer). Other models (X1, P1, A1) send the same report format and should work, but are untested.
 
 ## The lies
 
@@ -340,7 +340,7 @@ Early days. Here is what is known:
 
 - A RECONFIGURE request from the Home app (a new resolution or bitrate during a stream) keeps the running encoder settings.
 - For an IPv6 link-local viewer, RTCP is accepted from the interface of the HomeKit connection. If the host reports no interface for that address, it is accepted from any interface.
-- Only the H2C has been tested with real reports.
+- Only the H2C and the H3C have been tested with real reports. The H3C was tested listen-only: it sent its whole status with every report while printing and after a print. What it sends when idle after a power cycle has not been seen yet.
 
 If you find something new, file an issue.
 
