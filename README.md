@@ -171,7 +171,7 @@ bamboozle init
 
 (In Docker that's `docker compose run --rm bamboozle init`; from a checkout, `node src/cli.ts init`.)
 
-It asks for the IP and the access code (typing the code shows nothing, on purpose), reads the serial from the printer's certificate, asks for a name and an optional camera relay URL, writes everything to `~/.config/bamboozle/` (`data/` in Docker; readable only by you) and checks that the printer answers. It will not overwrite an existing config, because your Home pairing lives next to it; `init --force` sets up the printer again (its current name and camera URL are the defaults) and keeps everything else: the pairing, and your bridge, display and camera settings. A config it cannot read is left alone: fix it, or remove it to start over.
+It asks for the IP and the access code (typing the code shows nothing, on purpose), reads the serial from the printer's certificate, asks for a name and an optional camera relay URL, writes everything to `~/.config/bamboozle/` (`data/` in Docker; readable only by you) and checks that the printer answers. It will not overwrite an existing config, because your Home pairing lives next to it; `init --force` sets up the printer again (its current name and camera URL are the defaults) and keeps everything else: the pairing, and your bridge, display and camera settings (a listen-only printer stays listen-only). A config it cannot read is left alone: fix it, or remove it to start over.
 
 Then start the bridge:
 
@@ -207,7 +207,7 @@ Check that bamboozle can reach the printer:
 bamboozle probe --config config.json
 ```
 
-`probe` connects to every configured printer, grabs one status report, prints it as JSON and exits. If all printers respond, you're good. If not, that printer shows `"ok": false`, plus the error when there was one.
+`probe` connects to every configured printer, grabs one status report, prints it as JSON and exits. If all printers respond, you're good. If not, that printer shows `"ok": false`, plus an `"error"` that says what went wrong.
 
 Want to see how it looks before printing anything? `serve --simulate` feeds a simulated print cycle into the Home app, complete with progress, temperatures, and a brief simulated fault at the halfway mark. The printer need not be on.
 
@@ -251,6 +251,8 @@ Keep `storagePath` when you move or upgrade bamboozle. It holds the bridge's ide
 ## Troubleshooting
 
 **"No Response" on every tile.** Either bamboozle cannot reach the printer (while the printer is unavailable, every tile reports "No Response"), or the Home app cannot reach bamboozle. Run `probe` first (`docker compose run --rm bamboozle probe` in Docker): if it fails, it's the printer side. If `probe` works and the tiles still say "No Response", the Home app can't get to the bridge: see [Network and firewall](#network-and-firewall). One more case: if bamboozle shows the pairing code at start (it thinks it was never paired) while the Home app still lists the bridge, its pairing keys are gone. bamboozle 0.1.0 could lose them when the disk filled up. Stop bamboozle, restore `storage/hap/` from a backup, and start it again (while it runs it keeps the new keys in memory and would save them over the restored ones). Or remove the bridge from the Home app and add it again (the setup code stays the same).
+
+**"No Response" on a printer with `listenOnly`.** bamboozle never asks that printer for its status, so the printer has to send complete reports by itself. Run `probe`. An `"error"` that starts with `connected, but no full report` means the connection was up at the end of the probe and no full report had come: the printer may need to be asked. Try a longer `--timeout`; if nothing changes, remove `listenOnly`. Any other error is about the connection: see the entry above.
 
 **The camera tile stays blank.** Make sure the relay is running and reachable at the URL in `printers[].camera.source` (in Docker, `docker compose logs go2rtc` shows whether it reaches the printer). bamboozle needs ffmpeg on PATH (or set `camera.ffmpeg` to the full path). For VAAPI encoding, the bamboozle user needs access to the render device (`/dev/dri/renderD128` by default).
 
@@ -308,6 +310,7 @@ Not tested yet. The short version: mDNS stays in one subnet, so put bamboozle wi
 | `printers[].serial` | (required) | Printer serial number |
 | `printers[].accessCode` / `accessCodeFile` | (one required) | LAN access code, inline or in a file |
 | `printers[].model` | `3D printer` | Model shown in the Home app |
+| `printers[].listenOnly` | `false` | `true`: publish nothing to this printer, not even the status request; bamboozle only connects and listens (see [Security notes](#security-notes)) |
 | `printers[].camera.source` | none | `rtsp://`, `rtsps://`, `http://`, `https://` URL without credentials, an absolute file path, or `lavfi:<graph>` |
 | `storagePath` | `storage` | Pairing keys, bridge identity and printer certificate pins |
 | `bridge.name` | `bamboozle` | Bridge name in the Home app |
@@ -329,7 +332,7 @@ Not tested yet. The short version: mDNS stays in one subnet, so put bamboozle wi
 
 - The printer's TLS certificate is pinned on first contact (`storage/pins/<serial>.sha256`), and nothing is sent before the pin matches. If the printer gets a new certificate (factory reset, board replacement), delete the pin file to trust the new one.
 - The access code is never logged and never put on a command line. Keep the config file and `accessCodeFile` readable only by bamboozle.
-- bamboozle only reads the printer's status. It asks for one full report per connection and sends no other commands.
+- bamboozle only reads the printer's status. It asks for one full report per connection and sends no other commands. Want it to not even ask? Set `"listenOnly": true` on that printer: bamboozle then publishes nothing to it and just listens (it still logs in, subscribes to the reports and sends keep-alive pings). This only works with a printer whose reports are complete on their own; one that reports only what changed will sit on "No Response", waiting for a question nobody asks. A first `init` checks the connection with one status request (`init --force` on a printer that is already listen-only does not), so for a printer that must never get one, write the config by hand.
 
 ## Known limitations
 

@@ -121,6 +121,11 @@ function parsePrinter(item: unknown, index: number, baseDir: string): PrinterCon
   // The serial names files under storagePath (pins, overlay text).
   if (!/^[A-Za-z0-9]+$/.test(printer.serial)) throw new ConfigError(`${where}.serial may contain only letters and digits`);
   if (item['model'] !== undefined) printer.model = requireString(item['model'], `${where}.model`);
+  if (item['listenOnly'] !== undefined) {
+    // No guessing: "false" as a string must not decide what is published to a printer.
+    if (typeof item['listenOnly'] !== 'boolean') throw new ConfigError(`${where}.listenOnly must be true or false`);
+    printer.listenOnly = item['listenOnly'];
+  }
   if (item['camera'] !== undefined) {
     if (!isRaw(item['camera'])) throw new ConfigError(`${where}.camera must be an object`);
     printer.cameraSource = parseCameraSource(item['camera']['source'], `${where}.camera.source`);

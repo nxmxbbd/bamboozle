@@ -20,8 +20,9 @@ const USAGE = `usage:
           not paired it shows a code to scan with the iPhone camera
           --simulate  feed a simulated print cycle instead of the printers,
                       to see how each display style looks in the Home app
-  probe   connect to every configured printer, request one full status,
-          print it as JSON and exit (no HomeKit, nothing else sent)
+  probe   connect to every configured printer, request one full status
+          (a listen-only printer is only listened to), print it as JSON
+          and exit (no HomeKit, nothing else sent)
 
 The config is --config, else $BAMBOOZLE_CONFIG, else
 $XDG_CONFIG_HOME/bamboozle/config.json (~/.config/bamboozle/config.json).`;

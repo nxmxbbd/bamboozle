@@ -41,9 +41,9 @@ function mergeArrays(previous: Json[], next: Json[]): Json[] {
 /**
  * Accumulate an incremental `print` report into the state seen so far.
  *
- * Printers send the full status only when asked (`pushall`) and small deltas
- * otherwise. Objects merge recursively, keyed arrays merge per entry, and
- * everything else (scalars, unkeyed arrays such as `hms`) is replaced.
+ * Most printers send the full status only when asked (`pushall`) and small
+ * deltas otherwise. Objects merge recursively, keyed arrays merge per entry,
+ * and everything else (scalars, unkeyed arrays such as `hms`) is replaced.
  *
  * Known limit: an entry removed from a keyed array (an AMS unit unplugged)
  * stays until the next full status, because a delta cannot express removal.

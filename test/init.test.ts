@@ -275,6 +275,80 @@ test('init --force offers the old name and camera URL, and keeps model and port 
   assert.deepEqual([changed?.name, changed?.cameraSource], ['Garage', undefined]);
 });
 
+test('init --force keeps listenOnly for the same printer: setting it up again must not start publishing to it', async () => {
+  const opts = options();
+  mkdirSync(join(opts.configPath, '..'), { recursive: true });
+  const old = { name: 'Workshop', host: '192.0.2.10', serial: '01P00A000000000', accessCode: 'oldcode1', listenOnly: true };
+  writeFileSync(opts.configPath, JSON.stringify({ printers: [old] }));
+  // The probe at the end of init reads the config init wrote: it must already say listenOnly.
+  const probed: Array<boolean | undefined> = [];
+  const same = fakeIO(['192.0.2.10', '12345678', '', '']);
+  same.io.probe = async (path) => {
+    probed.push(loadConfig(path).printers[0]?.listenOnly);
+    return { ok: true, summary: 'idle' };
+  };
+  assert.equal(await init({ ...opts, force: true }, same.io), 0);
+  assert.equal(loadConfig(opts.configPath).printers[0]?.listenOnly, true);
+  assert.deepEqual(probed, [true]);
+});
+
+test('init --force stops when a listen-only printer shows another serial: a new printer, or the old one mistyped', async () => {
+  const opts = options();
+  mkdirSync(join(opts.configPath, '..'), { recursive: true });
+  // The old entry names another serial, or none at all; the printer at that address presents 01P00A000000001.
+  for (const serial of ['01P00A000000000', undefined]) {
+    const written = JSON.stringify({ printers: [{ name: 'Workshop', host: '192.0.2.10', ...(serial ? { serial } : {}), accessCode: 'oldcode1', listenOnly: true }] });
+    writeFileSync(opts.configPath, written);
+    let probes = 0;
+    const { io, said } = fakeIO(['192.0.2.10', '12345678', '', ''], { serial: '01P00A000000001' });
+    io.probe = async () => {
+      probes += 1;
+      return { ok: true, summary: 'idle' };
+    };
+    assert.equal(await init({ ...opts, force: true }, io), 1, String(serial));
+    assert.equal(probes, 0, 'the printer is not asked for its status');
+    assert.equal(readFileSync(opts.configPath, 'utf8'), written, 'the config is left as it was');
+    assert.ok(said.some((l) => l.includes('listen-only') && l.includes('nothing was changed')), said.join('\n'));
+  }
+});
+
+test('init --force stops at a listenOnly that is not true or false: dropping it would send the printer a request', async () => {
+  const opts = options();
+  mkdirSync(join(opts.configPath, '..'), { recursive: true });
+  for (const value of ['true', 'yes', 1, null]) {
+    const written = JSON.stringify({ printers: [{ name: 'Workshop', host: '192.0.2.10', serial: '01P00A000000000', accessCode: 'oldcode1', listenOnly: value }] });
+    writeFileSync(opts.configPath, written);
+    let probes = 0;
+    const { io, said, asked } = fakeIO(['192.0.2.10', '12345678', '', '']);
+    io.probe = async () => {
+      probes += 1;
+      return { ok: true, summary: 'idle' };
+    };
+    assert.equal(await init({ ...opts, force: true }, io), 1, JSON.stringify(value));
+    assert.deepEqual(asked, [], 'it stops before the first question');
+    assert.equal(probes, 0, 'the printer is not contacted');
+    assert.equal(readFileSync(opts.configPath, 'utf8'), written, 'the config is left as it was');
+    assert.ok(said.some((l) => l.includes('listenOnly') && l.includes('nothing was changed')), said.join('\n'));
+  }
+});
+
+test('when the probe connected but got no full report, init does not blame the address or the access code', async () => {
+  const silent = { ok: false as const, error: 'connected, but no full report within 20 s' };
+  const plain = fakeIO(['192.0.2.10', '12345678', '', ''], { probe: silent });
+  assert.equal(await init(options(), plain.io), 1);
+  assert.ok(plain.said.some((l) => l.includes('address and the access code are right')), plain.said.join('\n'));
+  assert.ok(!plain.said.some((l) => l.includes('Check the address')), plain.said.join('\n'));
+
+  // A printer that stays listen-only is told what its silence may mean.
+  const opts = options();
+  mkdirSync(join(opts.configPath, '..'), { recursive: true });
+  writeFileSync(opts.configPath, JSON.stringify({ printers: [{ name: 'Workshop', host: '192.0.2.10', serial: '01P00A000000000', accessCode: 'oldcode1', listenOnly: true }] }));
+  const kept = fakeIO(['192.0.2.10', '12345678', '', ''], { probe: silent });
+  assert.equal(await init({ ...opts, force: true }, kept.io), 1);
+  assert.ok(kept.said.some((l) => l.includes('address and the access code are right') && l.includes('listenOnly')), kept.said.join('\n'));
+  assert.equal(loadConfig(opts.configPath).printers[0]?.listenOnly, true, 'init leaves the decision to the user');
+});
+
 test('init falls back to asking for the serial, and re-asks empty required answers', async () => {
   const opts = options();
   const { io, said } = fakeIO(['', '192.0.2.10', '12345678', '01p00a000000001', '', ''], { serial: new Error('connection refused') });

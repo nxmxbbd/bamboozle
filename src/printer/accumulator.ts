@@ -2,13 +2,13 @@ import { isObject, mergeReport, type JsonObject } from './merge.ts';
 import { parseStatus, type PrinterStatus } from './status.ts';
 
 /**
- * A pushall reply carries the whole state; deltas carry what changed. One
- * message counts as full only if it alone yields everything the status
- * needs: state, progress, remaining time, error code and a nozzle
- * temperature. It is judged by the status parser itself, so the same rules
- * apply (finite numbers only; on the H2 series the active extruder's entry,
- * else the flat nozzle_temper). A field count is no evidence: a large delta
- * can still miss these.
+ * A pushall reply carries the whole state (some printers send that with
+ * every report, unasked); deltas carry what changed. One message counts as
+ * full only if it alone yields everything the status needs: state, progress,
+ * remaining time, error code and a nozzle temperature. It is judged by the
+ * status parser itself, so the same rules apply (finite numbers only; on the
+ * H2 series the active extruder's entry, else the flat nozzle_temper). A
+ * field count is no evidence: a large delta can still miss these.
  */
 function isFullReport(print: JsonObject): boolean {
   const status = parseStatus(print);
@@ -31,7 +31,7 @@ export class ReportAccumulator {
   #print: JsonObject = {};
   #complete = false;
 
-  /** True once a full report (a pushall reply) arrived in this session. */
+  /** True once a full report (a pushall reply, or one sent unasked) arrived in this session. */
   get complete(): boolean {
     return this.#complete;
   }

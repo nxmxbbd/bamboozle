@@ -4,6 +4,7 @@ import { createInterface } from 'node:readline/promises';
 import { ConfigError, parseConfig, parseJson } from './config.ts';
 import { openAdvice, openToEveryone, shellWord } from './paths.ts';
 import { isPrinterSerial } from './printer/serial.ts';
+import { CONNECTED_BUT_SILENT } from './probe.ts';
 
 export interface InitOptions {
   configPath: string;
@@ -79,6 +80,7 @@ interface PreviousPrinter {
   cameraSource?: string;
   model?: string;
   port?: number;
+  listenOnly?: boolean;
 }
 
 /** What init --force keeps: every setting but the printers, and the one printer it replaces. */
@@ -121,6 +123,8 @@ function previousPrinter(raw: Record<string, unknown>, dir: string, io: InitIO):
     if (port !== undefined) previous.port = port;
     else io.say('The old printer\'s port is not valid and will not be kept.');
   }
+  // Anything but true or false stopped init earlier (keptSettings).
+  if (raw['listenOnly'] === true) previous.listenOnly = true;
   return previous;
 }
 
@@ -128,9 +132,10 @@ function previousPrinter(raw: Record<string, unknown>, dir: string, io: InitIO):
  * For --force: everything in the old config but its printers, so the
  * pairing location (storagePath) and the bridge, display and camera
  * settings survive, plus the old printer for its name and camera URL. A
- * file that cannot be read or parsed, settings that do not check out, or
- * several printers (init sets up one) stop init before it asks anything
- * (null): starting over would quietly drop a custom storagePath.
+ * file that cannot be read or parsed, settings that do not check out,
+ * several printers (init sets up one) or a listenOnly that is not true or
+ * false stop init before it asks anything (null): starting over would
+ * quietly drop a custom storagePath, or start asking a printer for its status.
  */
 function keptSettings(configPath: string, io: InitIO): Kept | null {
   const leave = (why: string) => {
@@ -159,7 +164,12 @@ function keptSettings(configPath: string, io: InitIO): Kept | null {
   }
   const first: unknown = Array.isArray(printers) ? printers[0] : undefined;
   if (typeof first !== 'object' || first === null || Array.isArray(first)) return { settings };
-  return { settings, previous: previousPrinter(first as Record<string, unknown>, dirname(configPath), io) };
+  const old = first as Record<string, unknown>;
+  // Not dropped like a bad model or port: this one decides whether the printer is asked for its status.
+  if (old['listenOnly'] !== undefined && typeof old['listenOnly'] !== 'boolean') {
+    return leave(`The printer in ${configPath} has a listenOnly that is not true or false`);
+  }
+  return { settings, previous: previousPrinter(old, dirname(configPath), io) };
 }
 
 /** A typed serial, checked like the one from the certificate: it ends up in file names. */
@@ -230,6 +240,11 @@ export async function init(options: InitOptions, io: InitIO): Promise<number> {
     io.say(`Could not read the serial from the printer (${(error as Error).message}).`);
     serial = await askSerial(io);
   }
+  // Another serial may be a new printer or the old one mistyped; the probe below would ask it for its status either way.
+  if (previous?.listenOnly && previous.serial !== serial) {
+    io.say(`The printer in ${configPath} is listen-only, and the one at ${host} has another serial. Setting it up would send it a status request: put the right serial into that file, or remove "listenOnly" from it, then run init again; nothing was changed.`);
+    return 1;
+  }
   // With --force, the old printer's name and camera URL are the defaults.
   const oldName = previous?.name;
   const oldSource = previous?.cameraSource;
@@ -246,10 +261,12 @@ export async function init(options: InitOptions, io: InitIO): Promise<number> {
 
   const printer: Record<string, unknown> = { name, host, serial };
   // The same printer keeps its model; the port is part of the way to it, so
-  // it stays only when the address does.
+  // it stays only when the address does. It also stays listen-only: setting
+  // it up again must not start publishing to it (the probe below would).
   if (previous?.serial === serial) {
     if (previous.model !== undefined) printer['model'] = previous.model;
     if (previous.port !== undefined && previous.host === host) printer['port'] = previous.port;
+    if (previous.listenOnly) printer['listenOnly'] = true;
   }
   if (camera) printer['camera'] = { source: camera };
   // Check with the real parser before writing anything; an inline code stands in for the file.
@@ -270,7 +287,9 @@ export async function init(options: InitOptions, io: InitIO): Promise<number> {
   const result = await io.probe(configPath);
   if (!result.ok) {
     io.say(`The printer did not send a status yet: ${result.error}`);
-    io.say('Check the address and the access code (edit the files above), then try "bamboozle probe".');
+    if (!result.error.startsWith(CONNECTED_BUT_SILENT)) io.say('Check the address and the access code (edit the files above), then try "bamboozle probe".');
+    else if (printer['listenOnly']) io.say('The address and the access code are right, but no full report came from this listen-only printer. Try "bamboozle probe" with a longer --timeout; if that changes nothing, the printer may need to be asked: remove "listenOnly" from the config.');
+    else io.say('The address and the access code are right. Try "bamboozle probe" in a moment.');
     return 1;
   }
   io.say(`The printer answers: ${result.summary}.`);

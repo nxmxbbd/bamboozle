@@ -11,6 +11,13 @@ export interface PrinterConnection {
   port: number;
   serial: string;
   accessCode: string;
+  /**
+   * Publish nothing to this printer, not even the request for a full report:
+   * only connect and subscribe. Works with a printer whose reports are
+   * complete on their own; one that sends just the changes never gets to a
+   * full status this way.
+   */
+  listenOnly?: boolean;
 }
 
 /** Builds the MQTT client; replaceable in tests. */
@@ -24,7 +31,7 @@ export interface PrinterClientEvents {
 }
 
 // Asks the printer for one full status report. The only message bamboozle
-// publishes unless controls are enabled.
+// publishes, and a listen-only printer does not get it either.
 const PUSHALL = JSON.stringify({ pushing: { sequence_id: '0', command: 'pushall', version: 1, push_target: 1 } });
 
 export class PrinterClient extends EventEmitter<PrinterClientEvents> {
@@ -92,6 +99,8 @@ export class PrinterClient extends EventEmitter<PrinterClientEvents> {
           this.emit('error', error);
           return;
         }
+        // Nothing is published to a listen-only printer: its own reports have to do.
+        if (this.#connection.listenOnly) return;
         mqtt.publish(requestTopic, PUSHALL, { qos: 0 });
       });
     });
