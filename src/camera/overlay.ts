@@ -162,8 +162,9 @@ interface ClockFormats {
 
 // Built once per time zone and kept, never per status report: a formatter
 // thrown away holds about 25 KB outside the JavaScript heap until a full
-// garbage collection, which a quiet bridge almost never runs. The bridge asks
-// for one zone only: the configured one, or the host's as it was at first use.
+// garbage collection, and built per report they added up to hundreds of
+// megabytes. The bridge asks for one zone only: the configured one, or the
+// host's as it was at first use.
 const clockFormats = new Map<string, ClockFormats>();
 
 function formatsFor(timeZone: string | undefined): ClockFormats {
