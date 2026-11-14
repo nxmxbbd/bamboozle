@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { loadConfig } from './config.ts';
+import { updateErrorTexts } from './error-texts.ts';
 import { init, serveHint, terminalIO } from './init.ts';
 import { openAdvice, openToEveryone, resolveConfigPath } from './paths.ts';
 import { readPrinterSerial } from './printer/serial.ts';
@@ -13,6 +14,7 @@ const USAGE = `usage:
   bamboozle init  [--config <file>] [--host <ip>] [--name <name>] [--camera <url>] [--force]
   bamboozle serve [--config <file>] [--simulate]
   bamboozle probe [--config <file>] [--timeout <seconds>]
+  bamboozle error-texts [--config <file>]
 
   init    set up one printer: asks for its address and LAN access code,
           reads its serial, writes the config and checks the connection
@@ -23,6 +25,11 @@ const USAGE = `usage:
   probe   connect to every configured printer, request one full status
           (a listen-only printer is only listened to), print it as JSON
           and exit (no HomeKit, nothing else sent)
+  error-texts
+          download Bambu's explanations of HMS codes and print errors
+          for every configured printer model into storagePath, so the
+          camera overlay shows what a code means (the bridge itself
+          never downloads anything; run this again to update them)
 
 The config is --config, else $BAMBOOZLE_CONFIG, else
 $XDG_CONFIG_HOME/bamboozle/config.json (~/.config/bamboozle/config.json).`;
@@ -37,6 +44,11 @@ async function runProbe(configPath: string, timeoutSeconds: number): Promise<num
   const results = await probePrinters(loadConfig(configPath), timeoutSeconds);
   console.log(JSON.stringify(results, null, 2));
   return results.every((result) => result.ok) ? 0 : 1;
+}
+
+async function runErrorTexts(configPath: string): Promise<number> {
+  const config = loadConfig(configPath);
+  return (await updateErrorTexts(config.printers, config.storagePath)) ? 0 : 1;
 }
 
 async function runServe(configPath: string, simulate: boolean): Promise<number> {
@@ -107,7 +119,7 @@ async function main(argv: string[]): Promise<number> {
     console.log(USAGE);
     return command === undefined && !values.help ? 2 : 0;
   }
-  if (command !== 'init' && command !== 'probe' && command !== 'serve') {
+  if (command !== 'init' && command !== 'probe' && command !== 'serve' && command !== 'error-texts') {
     console.error(`unknown command: ${command}\n\n${USAGE}`);
     return 2;
   }
@@ -115,6 +127,7 @@ async function main(argv: string[]): Promise<number> {
   if (command === 'init') return runInit(configPath, values);
   if (!requireConfig(configPath)) return 2;
   if (command === 'serve') return runServe(configPath, values.simulate);
+  if (command === 'error-texts') return runErrorTexts(configPath);
 
   const timeout = Number(values.timeout);
   if (!Number.isFinite(timeout) || timeout <= 0) {

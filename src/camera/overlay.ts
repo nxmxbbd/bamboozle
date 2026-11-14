@@ -1,5 +1,6 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import type { CodeKind } from '../error-texts.ts';
 import type { PrinterStatus } from '../printer/status.ts';
 
 // The status overlay drawn on the camera image, for snapshots and live video.
@@ -39,6 +40,8 @@ interface Layer {
   y: string;
   box?: { color: string; border: number };
   shadow?: boolean;
+  /** Extra pixels between the lines of a multi-line text. */
+  lineSpacing?: number;
 }
 
 // --- layout ----------------------------------------------------------------
@@ -48,6 +51,15 @@ const BIG_SIZE = 112;
 const VALUE_SIZE = 44;
 const CAPTION_SIZE = 26;
 const DETAIL_SIZE = 22;
+const ALERT_SIZE = 18;
+const ALERT_TOP = 92;
+const ALERT_BORDER = 8;
+// The explanation of an alert's code sits in its own box under the alert, as
+// large as the detail line, which is still readable on a phone's tile.
+const EXPLANATION_SIZE = DETAIL_SIZE;
+const EXPLANATION_BORDER = 10;
+const EXPLANATION_SPACING = 7;
+const EXPLANATION_TOP = ALERT_TOP + ALERT_SIZE + ALERT_BORDER + 12 + EXPLANATION_BORDER;
 // 13 px makes the block advance ~8.02 px, close to whole pixels, so adjacent
 // blocks do not leave anti-aliased seams.
 const BAR_SIZE = 13;
@@ -74,6 +86,11 @@ const DETAIL_COLUMNS = [
   { key: 'bed', label: 'BED', at: 30, value: 34 },
   { key: 'chamber', label: 'CHAMBER', at: 41, value: 49 },
 ] as const;
+// Bambu's texts run up to ~340 characters. 72 columns x 5 lines hold all of
+// them and keep the box clear of the bottom block; a longer text (one of the
+// user's own) is cut with an ellipsis.
+export const EXPLANATION_COLUMNS = 72;
+export const EXPLANATION_LINES = 5;
 const column = (chars: number) => String(Math.round(MARGIN + chars * ADVANCE * DETAIL_SIZE));
 
 const TONES = Object.keys(COLORS) as Tone[];
@@ -100,8 +117,20 @@ export const LAYERS: readonly Layer[] = [
   // Printer name, top right.
   { file: 'name', weight: 'bold', size: PILL_SIZE, color: 'white', x: `w-tw-${MARGIN}`, y: '36', shadow: true },
   // Alert under the pill (HMS / print error).
-  { file: 'alert-yellow', weight: 'medium', size: 18, color: 'black', x: String(MARGIN), y: '92', box: { color: `${COLORS.yellow}@0.95`, border: 8 } },
-  { file: 'alert-red', weight: 'medium', size: 18, color: 'white', x: String(MARGIN), y: '92', box: { color: `${COLORS.red}@0.95`, border: 8 } },
+  { file: 'alert-yellow', weight: 'medium', size: ALERT_SIZE, color: 'black', x: String(MARGIN), y: String(ALERT_TOP), box: { color: `${COLORS.yellow}@0.95`, border: ALERT_BORDER } },
+  { file: 'alert-red', weight: 'medium', size: ALERT_SIZE, color: 'white', x: String(MARGIN), y: String(ALERT_TOP), box: { color: `${COLORS.red}@0.95`, border: ALERT_BORDER } },
+  // What the alert's code means, when bamboozle knows (see error-texts.ts).
+  {
+    file: 'explanation',
+    weight: 'medium',
+    size: EXPLANATION_SIZE,
+    color: 'white',
+    // Box edges line up with the alert's, whose border is narrower.
+    x: String(MARGIN + EXPLANATION_BORDER - ALERT_BORDER),
+    y: String(EXPLANATION_TOP),
+    box: { color: 'black@0.72', border: EXPLANATION_BORDER },
+    lineSpacing: EXPLANATION_SPACING,
+  },
   // Big progress, bottom left.
   { file: 'big', weight: 'bold', size: BIG_SIZE, color: 'white', x: String(MARGIN - 4), y: top(BIG_BASELINE, BIG_SIZE) },
   // Time, bottom right: dim caption above, bright value on the big baseline.
@@ -141,6 +170,11 @@ export interface OverlayInput {
   finishedAt: Date | null;
   /** IANA zone for clock times; the host's zone when absent. */
   timeZone?: string;
+  /**
+   * The text for a code, if one is known: `kind` 'hms' with the 16 hex digits
+   * of an HMS code, 'error' with the 8 of a print error, both upper case.
+   */
+  explain?: (kind: CodeKind, key: string) => string | undefined;
 }
 
 export type OverlayContent = Record<string, string>;
@@ -212,16 +246,53 @@ const STATE_LOOK: Record<PrinterStatus['state'] | 'offline', { tone: Tone; label
   offline: { tone: 'grey', label: 'OFFLINE' },
 };
 
-function alert(status: PrinterStatus): { tone: 'yellow' | 'red'; text: string } | null {
+interface Alert {
+  tone: 'yellow' | 'red';
+  text: string;
+  kind: CodeKind;
+  key: string;
+}
+
+function alert(status: PrinterStatus): Alert | null {
   if (status.printError !== 0) {
     const hex = (status.printError >>> 0).toString(16).toUpperCase().padStart(8, '0');
-    return { tone: 'red', text: `ERROR ${hex.slice(0, 4)}_${hex.slice(4)}` };
+    return { tone: 'red', text: `ERROR ${hex.slice(0, 4)}_${hex.slice(4)}`, kind: 'error', key: hex };
   }
   const shown = status.hms.filter((entry) => entry.severity === 'fatal' || entry.severity === 'serious');
   const first = shown[0];
   if (!first) return null;
   const more = shown.length > 1 ? ` +${shown.length - 1}` : '';
-  return { tone: first.severity === 'fatal' ? 'red' : 'yellow', text: `HMS ${first.code}${more}` };
+  return { tone: first.severity === 'fatal' ? 'red' : 'yellow', text: `HMS ${first.code}${more}`, kind: 'hms', key: first.code.replaceAll('_', '') };
+}
+
+/**
+ * Word-wraps a single-line text into at most `lines` lines of `columns`
+ * characters (the overlay font is monospace). A word longer than a line is
+ * cut; a text that does not fit ends in "...".
+ */
+function wrapText(text: string, columns: number, lines: number): string {
+  const out: string[] = [];
+  let line = '';
+  for (let word of text.split(/\s+/).filter(Boolean)) {
+    while (word.length > columns) {
+      if (line) out.push(line);
+      out.push(word.slice(0, columns));
+      line = '';
+      word = word.slice(columns);
+    }
+    if (!line) line = word;
+    else if (line.length + 1 + word.length <= columns) line += ` ${word}`;
+    else {
+      out.push(line);
+      line = word;
+    }
+  }
+  if (line) out.push(line);
+  if (out.length <= lines) return out.join('\n');
+  const kept = out.slice(0, lines);
+  const last = kept[lines - 1]!;
+  kept[lines - 1] = `${last.length + 3 > columns ? last.slice(0, columns - 3).trimEnd() : last}...`;
+  return kept.join('\n');
 }
 
 /** What every overlay layer shows for the given printer state. */
@@ -239,7 +310,11 @@ export function overlayContent(input: OverlayInput): OverlayContent {
   content[`pill-${look.tone}`] = `● ${look.label}`;
 
   const warning = alert(status);
-  if (warning) content[`alert-${warning.tone}`] = warning.text;
+  if (warning) {
+    content[`alert-${warning.tone}`] = warning.text;
+    const text = input.explain?.(warning.kind, warning.key);
+    if (text) content['explanation'] = wrapText(text, EXPLANATION_COLUMNS, EXPLANATION_LINES);
+  }
 
   const progress = Math.min(100, Math.max(0, Math.round(status.progress ?? 0)));
   const remaining = Math.max(0, Math.round(status.remainingMinutes ?? 0));
@@ -357,6 +432,7 @@ function drawtext(layer: Layer, files: OverlayFiles, fonts: OverlayFonts): strin
   ];
   if (layer.box) options.push('box=1', `boxcolor=${layer.box.color}`, `boxborderw=${layer.box.border}`);
   if (layer.shadow) options.push('shadowcolor=black@0.6', 'shadowx=0', 'shadowy=2');
+  if (layer.lineSpacing !== undefined) options.push(`line_spacing=${layer.lineSpacing}`);
   return `drawtext=${options.join(':')}`;
 }
 

@@ -1,6 +1,7 @@
 import { join } from 'node:path';
 import type { Config } from './config.ts';
 import { PrinterCamera } from './camera/camera.ts';
+import { ERROR_TEXTS_DIR, ErrorTexts, modelPrefix } from './error-texts.ts';
 import { resolveFonts } from './camera/fonts.ts';
 import type { OverlayFonts } from './camera/overlay.ts';
 import { startBridge } from './homekit/bridge.ts';
@@ -56,7 +57,12 @@ export async function serve(config: Config, options: ServeOptions): Promise<() =
     const source: StatusSource = options.simulate
       ? new SimulatedPrinter()
       : new PrinterClient(printer, filePinStore(config.storagePath, printer.serial));
-    return { printer, accessories, camera, source };
+    const texts = camera
+      ? new ErrorTexts(join(config.storagePath, ERROR_TEXTS_DIR), modelPrefix(printer.serial), {
+          warn: (message) => log.warn(`[${printer.name}] ${message}`),
+        })
+      : null;
+    return { printer, accessories, camera, texts, source };
   });
 
   const bridge = await startBridge(
@@ -65,9 +71,10 @@ export async function serve(config: Config, options: ServeOptions): Promise<() =
   );
 
   const timers: NodeJS.Timeout[] = [];
-  for (const { printer, accessories, camera, source } of printers) {
+  for (const { printer, accessories, camera, texts, source } of printers) {
     let finishedAt: Date | null = null;
     let lastState: string | null = null;
+    const explain = texts ? { explain: texts.explain.bind(texts) } : {};
     const refresh = () => {
       const available = source.online && source.hasFullStatus;
       accessories.update(toDisplay(source.status, available));
@@ -84,6 +91,7 @@ export async function serve(config: Config, options: ServeOptions): Promise<() =
         now: new Date(),
         finishedAt,
         ...(config.camera.timeZone ? { timeZone: config.camera.timeZone } : {}),
+        ...explain,
       });
     };
     source.on('status', refresh);
@@ -96,6 +104,9 @@ export async function serve(config: Config, options: ServeOptions): Promise<() =
       source.on('pinned', (fingerprint) => log.log(`[${printer.name}] pinned certificate ${fingerprint}`));
     }
     if (camera) timers.push(setInterval(refresh, OVERLAY_TICK_MS));
+    if (texts && !texts.hasBambuTable()) {
+      log.log(`[${printer.name}] the camera overlay shows error codes without their meaning: run "bamboozle error-texts" to download Bambu's texts`);
+    }
     refresh();
     source.start();
   }

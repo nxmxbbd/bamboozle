@@ -7,6 +7,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   BAR_SLOTS,
+  EXPLANATION_COLUMNS,
+  EXPLANATION_LINES,
   LAYER_FILES,
   LAYERS,
   OverlayFiles,
@@ -227,4 +229,63 @@ test('nothing left-aligned sits where the Home app puts its snapshot age', () =>
     return x < HOME_LABEL_ZONE.right && y + layer.size > HOME_LABEL_ZONE.top;
   });
   assert.deepEqual(blocked.map((layer) => layer.file), []);
+});
+
+// Invented codes and texts: what Bambu writes for a code is theirs, and some
+// of it is not public.
+const texts: Record<string, string> = {
+  'error:0C001234': 'The nozzle may be clogged, so the extrusion of filament was paused here. Check the hotend and resume when it is clear.',
+  'hms:0C0003000002ABCD': 'The camera saw something odd on the plate.',
+  'hms:0300010000010007': 'The heatbed is too hot.',
+};
+const explain: OverlayInput['explain'] = (kind, key) => texts[`${kind}:${key}`];
+
+test('a known code gets its explanation under the alert, wrapped on whole words', () => {
+  const c = overlayContent({ ...base, explain, status: { ...clean, state: 'paused', printError: 0x0c001234 } });
+  assert.equal(c['alert-red'], 'ERROR 0C00_1234');
+  const lines = c['explanation']!.split('\n');
+  assert.ok(lines.length >= 2, 'a 120-character text needs more than one line');
+  assert.ok(lines.every((line) => line.length <= EXPLANATION_COLUMNS && line === line.trim()), JSON.stringify(lines));
+  assert.equal(lines.join(' '), texts['error:0C001234']);
+
+  const hms = { code: '0C00_0300_0002_ABCD', severity: 'serious' as const, attr: 0, rawCode: 0 };
+  const serious = overlayContent({ ...base, explain, status: { ...clean, hms: [hms] } });
+  assert.equal(serious['alert-yellow'], 'HMS 0C00_0300_0002_ABCD');
+  assert.equal(serious['explanation'], 'The camera saw something odd on the plate.');
+});
+
+test('the explanation follows the alert that is shown', () => {
+  const fatal = { code: '0300_0100_0001_0007', severity: 'fatal' as const, attr: 0, rawCode: 0 };
+  const serious = { code: '0C00_0300_0002_ABCD', severity: 'serious' as const, attr: 0, rawCode: 0 };
+  const info = { code: '0C00_0300_0004_ABCD', severity: 'info' as const, attr: 0, rawCode: 0 };
+  assert.equal(overlayContent({ ...base, explain, status: { ...clean, hms: [fatal, serious] } })['explanation'], 'The heatbed is too hot.');
+  // A print error wins over HMS messages, its text too.
+  const both = overlayContent({ ...base, explain, status: { ...clean, printError: 0x0c001234, hms: [serious] } });
+  assert.match(both['explanation']!, /^The nozzle may be clogged/);
+  // Messages the overlay does not show get no text either.
+  assert.equal(overlayContent({ ...base, explain, status: { ...clean, hms: [info] } })['explanation'], '');
+});
+
+test('an unknown code, or no texts at all, shows the code alone', () => {
+  const unknown = overlayContent({ ...base, explain, status: { ...clean, printError: 0x0c009999 } });
+  assert.equal(unknown['alert-red'], 'ERROR 0C00_9999');
+  assert.equal(unknown['explanation'], '');
+  const none = overlayContent({ ...base, status: { ...clean, printError: 0x0c001234 } });
+  assert.equal(none['alert-red'], 'ERROR 0C00_1234');
+  assert.equal(none['explanation'], '');
+  const offline = overlayContent({ ...base, explain, status: { ...clean, printError: 0x0c001234 }, available: false });
+  assert.equal(offline['explanation'], '');
+});
+
+test('a text longer than the box ends in an ellipsis on its last line', () => {
+  const long = Array.from({ length: 80 }, (_, i) => `word${i}`).join(' ');
+  const c = overlayContent({ ...base, explain: () => long, status: { ...clean, printError: 0x0c001234 } });
+  const lines = c['explanation']!.split('\n');
+  assert.equal(lines.length, EXPLANATION_LINES);
+  assert.ok(lines.every((line) => line.length <= EXPLANATION_COLUMNS));
+  assert.ok(lines.at(-1)!.endsWith('...'));
+  // A word longer than a line is cut, not lost.
+  const unbroken = 'x'.repeat(EXPLANATION_COLUMNS + 5);
+  const cut = overlayContent({ ...base, explain: () => unbroken, status: { ...clean, printError: 0x0c001234 } });
+  assert.equal(cut['explanation']!.replace(/\n/g, ''), unbroken);
 });
