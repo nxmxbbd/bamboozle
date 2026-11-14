@@ -356,7 +356,7 @@ npm run typecheck
 
 To try the container image from a checkout, `docker build -t ghcr.io/nxmxbbd/bamboozle .` and Compose uses your build instead of pulling one.
 
-`scripts/sanitize-report.ts` turns a captured printer report into a test fixture without serial numbers, network addresses or the job names, file names, storage paths and links printers are known to report, and refuses to write one in which it still finds a serial number, an address, a link, a path or a file name. Handy for sharing bug reports without sharing your whole setup. Still, read the fixture before you share it: it only catches what it knows.
+`scripts/sanitize-report.ts` turns a captured printer report into a test fixture without serial numbers, network addresses or the job names, file names, storage paths and links printers are known to report, and refuses to write one in which it still finds a serial number, an address, or an unexpected link, path or file name. Handy for sharing bug reports without sharing your whole setup. Still, read the fixture before you share it: it only catches what it knows.
 
 `serve --simulate` is useful here too: it cycles through preparing, printing (with a brief fault at 50 %), finished and idle without a real printer. Just you, bamboozle, and a printer that exists only in its imagination.
 
