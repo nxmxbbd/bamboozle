@@ -3,7 +3,6 @@
 // snapshot bounds, shutdown).
 import { test, after, mock } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
 import { createSocket, type Socket } from 'node:dgram';
 import fs, { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { syncBuiltinESMExports } from 'node:module';
@@ -12,18 +11,11 @@ import { join } from 'node:path';
 import type { PrepareStreamResponse } from '@homebridge/hap-nodejs';
 import { PrinterCamera, SNAPSHOT_CACHE_SIZES, SNAPSHOT_QUEUE_LIMIT, type PrinterCameraOptions } from '../src/camera/camera.ts';
 import { STREAM_START, STREAM_STOP } from '../src/homekit/hap-constants.ts';
+import { hasFfmpeg } from './support/ffmpeg.ts';
+import { snapshot } from './support/snapshot.ts';
 
 const dir = mkdtempSync(join(tmpdir(), 'bamboozle-lifecycle-'));
 after(() => rmSync(dir, { recursive: true, force: true }));
-
-const hasFfmpeg = (() => {
-  try {
-    execFileSync('ffmpeg', ['-hide_banner', '-version'], { stdio: 'pipe' });
-    return true;
-  } catch {
-    return false;
-  }
-})();
 
 // A fake ffmpeg: logs start / end with a timestamp, sleeps, prints a tiny JPEG.
 const fake = join(dir, 'fake-ffmpeg.sh');
@@ -52,12 +44,6 @@ function withFakeFfmpeg(sleep: string): { log: string; options: Partial<PrinterC
   process.env['BZ_FAKE_LOG'] = log;
   process.env['BZ_FAKE_SLEEP'] = sleep;
   return { log, options: { ffmpeg: { path: fake, encoder: 'libx264', vaapiDevice: '/dev/dri/renderD128' } } };
-}
-
-function snapshot(cam: PrinterCamera, width: unknown, height: unknown): Promise<Buffer> {
-  return new Promise((resolve, reject) =>
-    cam.handleSnapshotRequest({ width, height } as never, (error, buffer) => (error || !buffer ? reject(error ?? new Error('no image')) : resolve(buffer))),
-  );
 }
 
 function intervals(log: string): Array<{ pid: string; start: number; end?: number }> {

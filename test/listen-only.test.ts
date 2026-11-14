@@ -5,7 +5,6 @@
 
 import { test, before, after, type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
-import { EventEmitter } from 'node:events';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { createServer as createTcpServer, type AddressInfo, type Socket } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -13,29 +12,12 @@ import { join } from 'node:path';
 import { ConfigError, parseConfig } from '../src/config.ts';
 import { PrinterClient, type MqttFactory, type PrinterConnection } from '../src/printer/client.ts';
 import { probePrinters } from '../src/probe.ts';
-import { CONNECT, SUBSCRIBE, fakePrinter, sent, tlsIdentity, type Behaviour, type FakePrinter, type TlsIdentity } from './support/fake-printer.ts';
+import { CONNECT, SUBSCRIBE, fakePrinter, sent, type Behaviour, type FakePrinter } from './support/fake-printer.ts';
+import { FakeMqtt } from './support/fake-mqtt.ts';
+import { tlsIdentity, type TlsIdentity } from './support/tls.ts';
 
 const FULL_REPORT = readFileSync(new URL('./fixtures/h2c-printing.json', import.meta.url));
 const CONNECTION: PrinterConnection = { name: 'Printer', host: '192.0.2.10', port: 8883, serial: 'S1', accessCode: 'a' };
-
-// A stand-in for the MQTT client, driven by hand.
-class FakeMqtt extends EventEmitter {
-  subscribed: string[] = [];
-  published: Array<{ topic: string; payload: string }> = [];
-  subscribe(topic: string, _options: unknown, callback: (error: Error | null) => void) {
-    this.subscribed.push(topic);
-    callback(null);
-    return this;
-  }
-  publish(topic: string, payload: string) {
-    this.published.push({ topic, payload });
-    return this;
-  }
-  connect() {
-    return this;
-  }
-  async endAsync() {}
-}
 
 function clientWith(connection: PrinterConnection): { client: PrinterClient; fake: FakeMqtt } {
   const fake = new FakeMqtt();

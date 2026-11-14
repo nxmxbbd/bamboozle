@@ -11,10 +11,10 @@ import assert from 'node:assert/strict';
 import { generateKeyPairSync } from 'node:crypto';
 import fs, { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { syncBuiltinESMExports } from 'node:module';
-import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { startBridge, type RunningBridge } from '../src/homekit/bridge.ts';
+import { freePort } from './support/ports.ts';
 
 // realpath: the injected failure matches paths as written (macOS's tmpdir is behind a link).
 const dir = realpathSync(mkdtempSync(join(tmpdir(), 'bamboozle-enospc-')));
@@ -25,17 +25,6 @@ after(async () => {
   await bridge?.stop();
   rmSync(dir, { recursive: true, force: true });
 });
-
-function freePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const server = createServer();
-    server.once('error', reject);
-    server.listen(0, '127.0.0.1', () => {
-      const { port } = server.address() as { port: number };
-      server.close(() => resolve(port));
-    });
-  });
-}
 
 /** Pairing keys as HAP-NodeJS stores them: Ed25519 secret key = seed + public key. */
 function savedAccessoryInfo(): string {

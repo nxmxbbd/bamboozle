@@ -11,7 +11,6 @@
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { cpSync, mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs';
-import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -23,6 +22,8 @@ import { toDisplay } from '../src/homekit/display.ts';
 import { PrinterAccessories } from '../src/homekit/printer-accessory.ts';
 import { parseStatus } from '../src/printer/status.ts';
 import type { JsonObject } from '../src/printer/merge.ts';
+import { fullType } from './support/hap.ts';
+import { freePort } from './support/ports.ts';
 
 const fixture = fileURLToPath(new URL('./fixtures/storage-0.1.0/', import.meta.url));
 const dir = realpathSync(mkdtempSync(join(tmpdir(), 'bamboozle-upgrade-')));
@@ -35,20 +36,6 @@ after(async () => {
   await bridge?.stop();
   rmSync(dir, { recursive: true, force: true });
 });
-
-function freePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const server = createServer();
-    server.once('error', reject);
-    server.listen(0, '127.0.0.1', () => {
-      const { port } = server.address() as { port: number };
-      server.close(() => resolve(port));
-    });
-  });
-}
-
-const HAP_BASE = '-0000-1000-8000-0026BB765291';
-const fullType = (type: string) => (/^[0-9A-F]{1,8}$/i.test(type) ? `${type.toUpperCase().padStart(8, '0')}${HAP_BASE}` : type.toUpperCase());
 
 interface Ids {
   aid: number;

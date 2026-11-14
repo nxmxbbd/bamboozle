@@ -7,8 +7,6 @@ import { test, after, before, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import fs, { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs';
 import { syncBuiltinESMExports } from 'node:module';
-import { setTimeout as delay } from 'node:timers/promises';
-import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Characteristic, Service } from '@homebridge/hap-nodejs';
@@ -22,40 +20,9 @@ import { isValidHomeKitName } from '../src/homekit/names.ts';
 import { PrinterAccessories, SNAP_BACK_MS } from '../src/homekit/printer-accessory.ts';
 import { parseStatus } from '../src/printer/status.ts';
 import type { JsonObject } from '../src/printer/merge.ts';
-
-interface HapCharacteristic {
-  iid: number;
-  type: string;
-  value?: unknown;
-  perms: string[];
-}
-interface HapService {
-  iid: number;
-  type: string;
-  primary?: boolean;
-  characteristics: HapCharacteristic[];
-}
-interface HapAccessory {
-  aid: number;
-  services: HapService[];
-}
-
-const HAP_BASE = '-0000-1000-8000-0026BB765291';
-/** HAP-NodeJS reports Apple types in short form ("10"); expand for comparison. */
-function fullType(type: string): string {
-  return /^[0-9A-F]{1,8}$/i.test(type) ? `${type.toUpperCase().padStart(8, '0')}${HAP_BASE}` : type.toUpperCase();
-}
-
-function freePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const server = createServer();
-    server.once('error', reject);
-    server.listen(0, '127.0.0.1', () => {
-      const { port } = server.address() as { port: number };
-      server.close(() => resolve(port));
-    });
-  });
-}
+import { fullType, type HapAccessory, type HapCharacteristic, type HapService } from './support/hap.ts';
+import { freePort } from './support/ports.ts';
+import { until } from './support/until.ts';
 
 const status = parseStatus(
   JSON.parse(readFileSync(new URL('./fixtures/h2c-printing.json', import.meta.url), 'utf8')) as JsonObject,
@@ -210,15 +177,6 @@ test('the camera serves an overlaid JPEG snapshot over HAP', async () => {
   assert.equal(image.subarray(0, 2).toString('hex'), 'ffd8');
   assert.ok(image.length > 5000, `a real picture, ${image.length} bytes`);
 });
-
-/** Polls instead of guessing how long a timer takes on a busy machine. */
-async function until(check: () => boolean, what: string, ms = 10_000): Promise<void> {
-  const deadline = Date.now() + ms;
-  while (!check()) {
-    if (Date.now() > deadline) assert.fail(`timed out waiting for ${what}`);
-    await delay(50);
-  }
-}
 
 test('a camera setting changed on a full disk is saved once there is space, without a crash', async () => {
   const camera = cameraAccessory();

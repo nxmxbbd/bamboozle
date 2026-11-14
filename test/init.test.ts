@@ -1,6 +1,5 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -9,6 +8,7 @@ import { loadConfig } from '../src/config.ts';
 import { ACCESS_CODE_FILE, init, type InitIO, type InitOptions } from '../src/init.ts';
 import { pairingLines, pairingQr } from '../src/homekit/pairing.ts';
 import { readPrinterSerial } from '../src/printer/serial.ts';
+import { tlsIdentity } from './support/tls.ts';
 
 const dir = mkdtempSync(join(tmpdir(), 'bamboozle-init-'));
 after(() => rmSync(dir, { recursive: true, force: true }));
@@ -386,16 +386,13 @@ test('init keeps the files but fails when the probe gets no status', async () =>
 let hasOpenssl = true;
 const certs: Record<string, { key: string; cert: string }> = {};
 before(() => {
-  try {
-    for (const cn of ['01P00A000000002', 'not a serial']) {
-      const key = join(dir, `${n}-${cn.length}.key`);
-      const crt = join(dir, `${n}-${cn.length}.crt`);
-      execFileSync('openssl', ['req', '-x509', '-newkey', 'ec', '-pkeyopt', 'ec_paramgen_curve:prime256v1', '-nodes',
-        '-keyout', key, '-out', crt, '-days', '1', '-subj', `/CN=${cn}`], { stdio: 'ignore' });
-      certs[cn] = { key: readFileSync(key, 'utf8'), cert: readFileSync(crt, 'utf8') };
+  for (const cn of ['01P00A000000002', 'not a serial']) {
+    const identity = tlsIdentity(dir, cn);
+    if (!identity) {
+      hasOpenssl = false;
+      return;
     }
-  } catch {
-    hasOpenssl = false;
+    certs[cn] = identity;
   }
 });
 

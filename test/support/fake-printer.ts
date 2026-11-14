@@ -2,11 +2,9 @@
 // that speaks just enough MQTT to take a connection and a subscription, send
 // one full report per connection, and record every packet it is sent.
 
-import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
 import type { AddressInfo, Socket } from 'node:net';
-import { join } from 'node:path';
 import { createServer } from 'node:tls';
+import type { TlsIdentity } from './tls.ts';
 
 export const CONNECT = 1;
 export const PUBLISH = 3;
@@ -96,24 +94,6 @@ export interface Seen {
 }
 
 export type Behaviour = 'reports unasked' | 'answers when asked';
-
-export interface TlsIdentity {
-  key: string;
-  cert: string;
-}
-
-/** A self-signed certificate for a fake printer, written to `dir`; null without openssl. */
-export function tlsIdentity(dir: string, commonName: string): TlsIdentity | null {
-  try {
-    const key = join(dir, `${commonName}.key`);
-    const cert = join(dir, `${commonName}.crt`);
-    execFileSync('openssl', ['req', '-x509', '-newkey', 'ec', '-pkeyopt', 'ec_paramgen_curve:prime256v1', '-nodes',
-      '-keyout', key, '-out', cert, '-days', '1', '-subj', `/CN=${commonName}`], { stdio: 'ignore' });
-    return { key: readFileSync(key, 'utf8'), cert: readFileSync(cert, 'utf8') };
-  } catch {
-    return null;
-  }
-}
 
 // A printer reports about once a second. The unasked report waits this long
 // after the subscription, so a request the client was going to send is on the

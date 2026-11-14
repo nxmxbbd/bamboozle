@@ -9,12 +9,13 @@ import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync } from 'node:fs';
-import { connect, createServer } from 'node:net';
+import { connect } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { HttpClient } from 'hap-controller';
+import { freePort } from './support/ports.ts';
 
 // realpath: the full-disk preload matches paths as written (macOS's tmpdir is behind a link).
 const storage = realpathSync(mkdtempSync(join(tmpdir(), 'bamboozle-restart-')));
@@ -26,17 +27,6 @@ after(() => {
 
 const script = fileURLToPath(new URL('./support/bridge-process.ts', import.meta.url));
 const fullDisk = fileURLToPath(new URL('./support/full-disk.ts', import.meta.url));
-
-function freePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const server = createServer();
-    server.once('error', reject);
-    server.listen(0, '127.0.0.1', () => {
-      const { port } = server.address() as { port: number };
-      server.close(() => resolve(port));
-    });
-  });
-}
 
 interface Started {
   child: ChildProcess;

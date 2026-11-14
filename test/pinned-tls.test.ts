@@ -1,7 +1,6 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { mkdtempSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { connect, createServer, type Server } from 'node:tls';
@@ -14,6 +13,7 @@ import {
   type PinStore,
   type TlsConnect,
 } from '../src/printer/pinned-tls.ts';
+import { tlsIdentity } from './support/tls.ts';
 
 // Throwaway self-signed certificates, generated per run so no key is committed.
 let dir = '';
@@ -21,12 +21,9 @@ let certA = { key: '', cert: '', fingerprint: '' };
 let certB = { key: '', cert: '', fingerprint: '' };
 
 function makeCert(name: string) {
-  const key = join(dir, `${name}.key`);
-  const cert = join(dir, `${name}.crt`);
-  execFileSync('openssl', ['req', '-x509', '-newkey', 'ec', '-pkeyopt', 'ec_paramgen_curve:prime256v1', '-nodes',
-    '-keyout', key, '-out', cert, '-days', '1', '-subj', `/CN=${name}`], { stdio: 'ignore' });
-  const pem = readFileSync(cert, 'utf8');
-  return { key: readFileSync(key, 'utf8'), cert: pem, fingerprint: new X509Certificate(pem).fingerprint256 };
+  const identity = tlsIdentity(dir, name);
+  if (!identity) throw new Error('openssl not available');
+  return { ...identity, fingerprint: new X509Certificate(identity.cert).fingerprint256 };
 }
 
 let hasOpenssl = true;

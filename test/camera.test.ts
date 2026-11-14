@@ -10,6 +10,8 @@ import { snapshotArgs, sourceArgs, srtpParams, streamArgs, type FfmpegSettings, 
 import { STREAM_START, STREAM_STOP } from '../src/homekit/hap-constants.ts';
 import { parseStatus } from '../src/printer/status.ts';
 import type { JsonObject } from '../src/printer/merge.ts';
+import { hasFfmpeg } from './support/ffmpeg.ts';
+import { snapshot } from './support/snapshot.ts';
 
 const LIBX264: FfmpegSettings = { path: 'ffmpeg', encoder: 'libx264', vaapiDevice: '/dev/dri/renderD128' };
 const SPEC: StreamSpec = {
@@ -66,15 +68,6 @@ test('srtp params are key then salt, base64', () => {
 
 // --- with ffmpeg ---------------------------------------------------------------
 
-const hasFfmpeg = (() => {
-  try {
-    execFileSync('ffmpeg', ['-hide_banner', '-encoders'], { stdio: 'pipe' });
-    return true;
-  } catch {
-    return false;
-  }
-})();
-
 const dir = mkdtempSync(join(tmpdir(), 'bamboozle-camera-'));
 after(() => rmSync(dir, { recursive: true, force: true }));
 
@@ -91,12 +84,6 @@ async function camera(name: string): Promise<PrinterCamera> {
   const status = parseStatus(JSON.parse(readFileSync(new URL('./fixtures/h2c-printing.json', import.meta.url), 'utf8')) as JsonObject);
   cam.update({ status, available: true, name: 'H2C', now: new Date(), finishedAt: null });
   return cam;
-}
-
-function snapshot(cam: PrinterCamera, width: number, height: number): Promise<Buffer> {
-  return new Promise((resolve, reject) =>
-    cam.handleSnapshotRequest({ width, height }, (error, buffer) => (error || !buffer ? reject(error ?? new Error('no image')) : resolve(buffer))),
-  );
 }
 
 test('snapshot: a JPEG of the requested size, then served from cache', { skip: !hasFfmpeg && 'ffmpeg not available' }, async () => {

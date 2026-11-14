@@ -1,7 +1,6 @@
 // Regression tests for the 2026-10 full review findings.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { EventEmitter } from 'node:events';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -10,6 +9,7 @@ import { ReportAccumulator } from '../src/printer/accumulator.ts';
 import { PrinterClient, type MqttFactory } from '../src/printer/client.ts';
 import { parseStatus } from '../src/printer/status.ts';
 import { overlayContent } from '../src/camera/overlay.ts';
+import { FakeMqtt } from './support/fake-mqtt.ts';
 
 const SECRET = 'DUMMY123';
 
@@ -198,23 +198,6 @@ test('numbers that overflow to Infinity do not complete the status', () => {
   control.handle(message());
   assert.equal(control.complete, true, 'the same message without an overflow');
 });
-
-// A stand-in for the MQTT client, driven by hand.
-class FakeMqtt extends EventEmitter {
-  published: string[] = [];
-  subscribe(_topic: string, _options: unknown, callback: (error: Error | null) => void) {
-    callback(null);
-    return this;
-  }
-  publish(_topic: string, payload: string) {
-    this.published.push(payload);
-    return this;
-  }
-  connect() {
-    return this;
-  }
-  async endAsync() {}
-}
 
 test('reconnect: the old session is forgotten before the client announces it is online', () => {
   const fake = new FakeMqtt();

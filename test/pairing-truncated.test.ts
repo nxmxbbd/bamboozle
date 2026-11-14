@@ -7,10 +7,10 @@
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { startBridge, type RunningBridge } from '../src/homekit/bridge.ts';
+import { freePort } from './support/ports.ts';
 
 const dir = mkdtempSync(join(tmpdir(), 'bamboozle-truncated-'));
 let bridge: RunningBridge | undefined;
@@ -18,17 +18,6 @@ after(async () => {
   await bridge?.stop();
   rmSync(dir, { recursive: true, force: true });
 });
-
-function freePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const server = createServer();
-    server.once('error', reject);
-    server.listen(0, '127.0.0.1', () => {
-      const { port } = server.address() as { port: number };
-      server.close(() => resolve(port));
-    });
-  });
-}
 
 test('an empty pairing file stops the bridge instead of creating a new identity', async () => {
   const storage = join(dir, 'storage');

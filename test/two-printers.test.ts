@@ -9,30 +9,19 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { X509Certificate } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
-import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { setTimeout as delay } from 'node:timers/promises';
 import { Characteristic, Service } from '@homebridge/hap-nodejs';
 import { HttpClient } from 'hap-controller';
 import { parseConfig } from '../src/config.ts';
 import { STATUS_COMMUNICATION_FAILURE } from '../src/homekit/hap-constants.ts';
 import { serve } from '../src/serve.ts';
-import { CONNECT, PUBLISH, SUBSCRIBE, fakePrinter, sent, tlsIdentity, type FakePrinter, type TlsIdentity } from './support/fake-printer.ts';
-
-interface HapCharacteristic {
-  iid: number;
-  type: string;
-  value?: unknown;
-}
-interface HapService {
-  type: string;
-  characteristics: HapCharacteristic[];
-}
-interface HapAccessory {
-  aid: number;
-  services: HapService[];
-}
+import { CONNECT, PUBLISH, SUBSCRIBE, fakePrinter, sent, type FakePrinter } from './support/fake-printer.ts';
+import { hasFfmpeg } from './support/ffmpeg.ts';
+import { fullType, type HapAccessory, type HapCharacteristic } from './support/hap.ts';
+import { freePort } from './support/ports.ts';
+import { tlsIdentity, type TlsIdentity } from './support/tls.ts';
+import { until } from './support/until.ts';
 
 /** One of the two printers: what it is called, what it sends, what that report says, and what its camera shows. */
 interface Printer {
@@ -51,35 +40,6 @@ interface Printer {
 const H2C: Printer = { name: 'H2C', serial: 'TESTH2C1', accessCode: '12345678', fixture: 'h2c-printing', progress: 47, chamber: 59, layers: '24/120', listenOnly: false, picture: 'red' };
 const H3C: Printer = { name: 'H3C', serial: 'TESTH3C1', accessCode: '87654321', fixture: 'h3c-printing', progress: 78, chamber: 39, layers: '122/238', listenOnly: true, picture: 'blue' };
 const BOTH = [H2C, H3C];
-
-const hasFfmpeg = (() => {
-  try {
-    execFileSync('ffmpeg', ['-hide_banner', '-encoders'], { stdio: 'pipe' });
-    return true;
-  } catch {
-    return false;
-  }
-})();
-
-function freePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const server = createServer();
-    server.once('error', reject);
-    server.listen(0, '127.0.0.1', () => {
-      const { port } = server.address() as { port: number };
-      server.close(() => resolve(port));
-    });
-  });
-}
-
-/** Polls instead of guessing how long something takes on a busy machine. */
-async function until(check: () => Promise<boolean>, what: string, ms = 15_000): Promise<void> {
-  const deadline = Date.now() + ms;
-  while (!(await check())) {
-    if (Date.now() > deadline) assert.fail(`timed out waiting for ${what}`);
-    await delay(100);
-  }
-}
 
 let dir = '';
 let storage = '';
@@ -154,12 +114,6 @@ after(async () => {
   }
 });
 
-const HAP_BASE = '-0000-1000-8000-0026BB765291';
-/** HAP-NodeJS reports Apple types in short form ("10"); expand for comparison. */
-function fullType(type: string): string {
-  return /^[0-9A-F]{1,8}$/i.test(type) ? `${type.toUpperCase().padStart(8, '0')}${HAP_BASE}` : type.toUpperCase();
-}
-
 function characteristic(accessory: HapAccessory, service: string, type: string): HapCharacteristic | undefined {
   return accessory.services.find((s) => fullType(s.type) === service)?.characteristics.find((c) => fullType(c.type) === type);
 }
@@ -197,7 +151,7 @@ let waited: Promise<void> | null = null;
 function reports(): Promise<void> {
   waited ??= (async () => {
     for (const printer of BOTH) {
-      await until(async () => (await read(progressOf(printer))).value !== undefined, `the ${printer.name} to report`).catch(() => {});
+      await until(async () => (await read(progressOf(printer))).value !== undefined, `the ${printer.name} to report`, 15_000, 100).catch(() => {});
     }
   })();
   return waited;
@@ -284,11 +238,11 @@ test('a printer whose connection closes takes only its own tiles with it, and a 
   await reports();
   const earlier = (fakes.get(H3C) as FakePrinter).seen.logins.length;
   (fakes.get(H3C) as FakePrinter).drop();
-  await until(async () => (await read(progressOf(H3C))).status === STATUS_COMMUNICATION_FAILURE, 'the H3C tiles to show No Response');
+  await until(async () => (await read(progressOf(H3C))).status === STATUS_COMMUNICATION_FAILURE, 'the H3C tiles to show No Response', 15_000, 100);
   assert.equal((await read(progressOf(H2C))).value, H2C.progress, 'the H2C is still there');
   assert.ok(logs.includes('[H3C] disconnected'), logged());
   // The client connects again after five seconds, and the fake printer sends its report again, unasked.
-  await until(async () => (await read(progressOf(H3C))).value === H3C.progress, 'the H3C to be back', 30_000);
+  await until(async () => (await read(progressOf(H3C))).value === H3C.progress, 'the H3C to be back', 30_000, 100);
   assert.equal((fakes.get(H3C) as FakePrinter).seen.logins.length, earlier + 1, 'one new connection after the old one closed');
   assert.equal((await read(progressOf(H2C))).value, H2C.progress);
   assert.ok(!logs.includes('[H2C] disconnected'), logged());
