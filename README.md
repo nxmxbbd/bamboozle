@@ -2,7 +2,7 @@
 
 Your Bambu Lab printer, in Apple Home. No cloud, no Home Assistant, no Homebridge. Just one small process on your network, telling HomeKit a few white lies.
 
-> **Status:** early, and look-but-don't-touch: bamboozle shows your printer in Home but doesn't control it ([no controls yet](#no-controls-yet)). Tested with an H2C and an H3C (the H3C only as a [listen-only](#security-notes) printer). Other models (X1, P1, A1) send the same report format and should work, but are untested.
+> **Status:** early, and look-but-don't-touch: bamboozle shows your printer in Home but doesn't control it (except an optional [Resume switch](#resume-with-a-command-of-your-own) that runs a command you provide). Tested with an H2C and an H3C (the H3C only as a [listen-only](#security-notes) printer). Other models (X1, P1, A1) send the same report format and should work, but are untested.
 
 ## The lies
 
@@ -36,9 +36,30 @@ bamboozle also publishes a few sensors per printer:
 
 Nozzle and bed temperatures are available too (`display.temperatures`). A light sensor whose lux value is the minutes remaining (`display.countdown: ["lux"]`) is there for automations, though it only shows in the room's status bar.
 
-### No controls (yet)
+### No controls (yet), except Resume
 
-There are no controls yet. Chamber light and pause/resume are planned, only for printers that accept unsigned LAN commands (Developer Mode). There will never be a "stop". Printers are expensive, your models are precious, and bamboozle does not want that responsibility.
+bamboozle itself sends the printer nothing but the status request. Chamber light and pause are planned, only for printers that accept unsigned LAN commands (Developer Mode). There will never be a "stop". Printers are expensive, your models are precious, and bamboozle does not want that responsibility.
+
+### Resume, with a command of your own
+
+A paused print can be resumed from the Home app, if you tell bamboozle how. bamboozle does not resume anything itself: you give it a program to run, and that program talks to the printer however your printer wants to be talked to.
+
+```json
+"printers": [{ "name": "H2C", "...": "...", "resumeCommand": ["/usr/local/bin/my-resume", "--printer", "h2c"] }]
+```
+
+With `resumeCommand` set, the printer gets a **Resume** switch in Home. Turn it on while the printer is paused, and bamboozle runs the command:
+
+- The program (an absolute path) and its arguments are run as given, in `/`: no shell, no `PATH` lookup.
+- Its environment holds `BAMBOOZLE_PRINTER` (the printer's `name`) and a fixed `PATH`, and nothing else of bamboozle's.
+- It has 30 seconds. Exit code 0 means the printer accepted the resume, anything else means it didn't. One short line on standard output may say why; bamboozle logs it (printable ASCII, up to 200 characters; standard error is discarded).
+- It runs in its own process group, and the whole group is ended when it exits, after 30 seconds, or when bamboozle stops. bamboozle has its answer after 30 seconds at the latest, whatever the command leaves behind.
+- It runs as bamboozle's user, with bamboozle's restrictions. Under the example systemd unit below that means: the file system is read-only except bamboozle's state directory, `/home` and `/root` are hidden, `/tmp` is private, and `sudo` or setuid programs do nothing (`NoNewPrivileges`). In Docker it runs as the container's user (uid 1000, or whatever `user:` says), so the program has to be in the container (mount it read-only), and the compose file's `init: true` cleans up after it.
+- Only one run at a time per printer. After an accepted resume, the switch takes no new press while the printer still reports paused (for up to a minute), so a double tap sends one resume, not two.
+
+The switch stays on while the command runs and goes off when it is done. If the command fails, the switch answers "No Response" for 30 seconds (the Home app shows it when it next reads the switch, for example when you open the room), and the log says why. Turning the switch off does nothing, so a scene that turns everything off can't resume a print. Turning it on while the printer is not paused, is unreachable, or is still busy with the last run is refused, and the Home app shows an error.
+
+Mind that Home asks for no confirmation: anyone in your Home, Siri, and any automation that turns the switch on can resume a paused print. Pauses happen for a reason, so make your command check that this one may be resumed.
 
 ## What you need
 
@@ -194,7 +215,7 @@ bamboozle init
 
 (In Docker that's `docker compose run --rm bamboozle init`; from a checkout, `node src/cli.ts init`.)
 
-It asks for the IP and the access code (typing the code shows nothing, on purpose), reads the serial from the printer's certificate, asks for a name and an optional camera relay URL, writes everything to `~/.config/bamboozle/` (`data/` in Docker; readable only by you) and checks that the printer answers. It will not overwrite an existing config, because your Home pairing lives next to it; `init --force` sets up the printer again (its current name and camera URL are the defaults) and keeps everything else: the pairing, and your bridge, display and camera settings (a listen-only printer stays listen-only). A config it cannot read is left alone: fix it, or remove it to start over.
+It asks for the IP and the access code (typing the code shows nothing, on purpose), reads the serial from the printer's certificate, asks for a name and an optional camera relay URL, writes everything to `~/.config/bamboozle/` (`data/` in Docker; readable only by you) and checks that the printer answers. It will not overwrite an existing config, because your Home pairing lives next to it; `init --force` sets up the printer again (its current name and camera URL are the defaults) and keeps everything else: the pairing, and your bridge, display and camera settings (a listen-only printer stays listen-only, and the same printer keeps its `resumeCommand`). A config it cannot read is left alone: fix it, or remove it to start over.
 
 Then start the bridge:
 
@@ -334,6 +355,7 @@ Not tested yet. The short version: mDNS stays in one subnet, so put bamboozle wi
 | `printers[].accessCode` / `accessCodeFile` | (one required) | LAN access code, inline or in a file |
 | `printers[].model` | `3D printer` | Model shown in the Home app |
 | `printers[].listenOnly` | `false` | `true`: publish nothing to this printer, not even the status request; bamboozle only connects and listens (see [Security notes](#security-notes)) |
+| `printers[].resumeCommand` | none | Program and arguments for the [Resume switch](#resume-with-a-command-of-your-own), e.g. `["/usr/local/bin/my-resume"]`; without it, no switch |
 | `printers[].camera.source` | none | `rtsp://`, `rtsps://`, `http://`, `https://` URL without credentials, an absolute file path, or `lavfi:<graph>` |
 | `storagePath` | `storage` | Pairing keys, bridge identity, printer certificate pins and [error texts](#what-the-codes-mean) |
 | `bridge.name` | `bamboozle` | Bridge name in the Home app |
@@ -353,6 +375,7 @@ Not tested yet. The short version: mDNS stays in one subnet, so put bamboozle wi
 
 ## Security notes
 
+- The Resume switch runs `resumeCommand` as the bamboozle user, with nothing but `BAMBOOZLE_PRINTER` and a fixed `PATH` in its environment. Keep the program and its directory writable only by root, since whoever can replace it decides what a press does. A listen-only printer gets the switch too if you configure one: bamboozle still publishes nothing to it, and what your command does is up to you.
 - The printer's TLS certificate is pinned on first contact (`storage/pins/<serial>.sha256`), and nothing is sent before the pin matches. If the printer gets a new certificate (factory reset, board replacement), delete the pin file to trust the new one.
 - The bridge itself never talks to the internet. `bamboozle error-texts` does, when you run it: it asks `e.bambulab.com` for the texts of your printer models (the first three characters of each serial, from your IP address) and sends nothing else.
 - The access code is never logged and never put on a command line. Keep the config file and `accessCodeFile` readable only by bamboozle.

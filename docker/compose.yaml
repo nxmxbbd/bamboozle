@@ -11,12 +11,19 @@ services:
   bamboozle:
     image: ghcr.io/nxmxbbd/bamboozle:latest
     network_mode: host
+    init: true # reaps what a Resume command leaves behind
     restart: unless-stopped
     environment:
       TZ: Etc/UTC # your time zone, for the finish time on the camera overlay
     # The image runs as uid 1000: ./data must be writable for it (see the README).
     volumes:
       - ./data:/data # config, access code and the bridge's pairing keys
+      # A printers[].resumeCommand program, read-only; a missing file is an error, not a directory:
+      # - type: bind
+      #   source: /usr/local/bin/my-resume
+      #   target: /usr/local/bin/my-resume
+      #   read_only: true
+      #   bind: { create_host_path: false }
     # Hardware encoding on an Intel GPU ("camera": { "encoder": "vaapi" }):
     # pass the GPU in, plus the group that owns it.
     # devices:
