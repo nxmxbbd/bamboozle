@@ -46,7 +46,8 @@ function mergeArrays(previous: Json[], next: Json[]): Json[] {
  * and everything else (scalars, unkeyed arrays such as `hms`) is replaced.
  *
  * Known limit: an entry removed from a keyed array (an AMS unit unplugged)
- * stays until the next full status, because a delta cannot express removal.
+ * stays until the next connection: a delta cannot express removal, and a
+ * full status is merged like any other report.
  */
 export function mergeReport(previous: JsonObject, delta: JsonObject): JsonObject {
   const merged: JsonObject = { ...previous };
