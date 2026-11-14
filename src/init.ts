@@ -81,6 +81,7 @@ interface PreviousPrinter {
   model?: string;
   port?: number;
   listenOnly?: boolean;
+  resumeCommand?: string[];
 }
 
 /** What init --force keeps: every setting but the printers, and the one printer it replaces. */
@@ -125,6 +126,11 @@ function previousPrinter(raw: Record<string, unknown>, dir: string, io: InitIO):
   }
   // Anything but true or false stopped init earlier (keptSettings).
   if (raw['listenOnly'] === true) previous.listenOnly = true;
+  if (raw['resumeCommand'] !== undefined) {
+    const command = accepted({ resumeCommand: raw['resumeCommand'] })?.resumeCommand;
+    if (command !== undefined) previous.resumeCommand = command;
+    else io.say('The old printer\'s resumeCommand is not valid and will not be kept.');
+  }
   return previous;
 }
 
@@ -267,6 +273,8 @@ export async function init(options: InitOptions, io: InitIO): Promise<number> {
     if (previous.model !== undefined) printer['model'] = previous.model;
     if (previous.port !== undefined && previous.host === host) printer['port'] = previous.port;
     if (previous.listenOnly) printer['listenOnly'] = true;
+    // Its Resume switch stays: dropping the command would remove it from Home.
+    if (previous.resumeCommand) printer['resumeCommand'] = previous.resumeCommand;
   }
   if (camera) printer['camera'] = { source: camera };
   // Check with the real parser before writing anything; an inline code stands in for the file.

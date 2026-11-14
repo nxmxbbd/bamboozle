@@ -8,6 +8,7 @@ import { startBridge } from './homekit/bridge.ts';
 import { toDisplay } from './homekit/display.ts';
 import { pairingLines } from './homekit/pairing.ts';
 import { PrinterAccessories } from './homekit/printer-accessory.ts';
+import { ResumeControl } from './homekit/resume-control.ts';
 import { PrinterClient } from './printer/client.ts';
 import { filePinStore } from './printer/pinned-tls.ts';
 import { SimulatedPrinter, type StatusSource } from './sim.ts';
@@ -62,22 +63,26 @@ export async function serve(config: Config, options: ServeOptions): Promise<() =
           warn: (message) => log.warn(`[${printer.name}] ${message}`),
         })
       : null;
-    return { printer, accessories, camera, texts, source };
+    const resume = printer.resumeCommand
+      ? new ResumeControl({ name: printer.name, serial: printer.serial, ...(printer.model ? { model: printer.model } : {}), command: printer.resumeCommand, log })
+      : null;
+    return { printer, accessories, camera, texts, resume, source };
   });
 
   const bridge = await startBridge(
     { name: config.bridge.name, port: config.bridge.port, storagePath: config.storagePath, log, ...(config.bridge.bind ? { bind: config.bridge.bind } : {}) },
-    printers.flatMap(({ accessories, camera }) => [...accessories.accessories, ...(camera ? [camera.accessory] : [])]),
+    printers.flatMap(({ accessories, camera, resume }) => [...accessories.accessories, ...(camera ? [camera.accessory] : []), ...(resume ? [resume.accessory] : [])]),
   );
 
   const timers: NodeJS.Timeout[] = [];
-  for (const { printer, accessories, camera, texts, source } of printers) {
+  for (const { printer, accessories, camera, texts, resume, source } of printers) {
     let finishedAt: Date | null = null;
     let lastState: string | null = null;
     const explain = texts ? { explain: texts.explain.bind(texts) } : {};
     const refresh = () => {
       const available = source.online && source.hasFullStatus;
       accessories.update(toDisplay(source.status, available));
+      resume?.update(source.status, available);
       if (!camera) return;
       const state = source.status?.state ?? null;
       // Only a finish bamboozle watched happen has a known time.
@@ -125,7 +130,11 @@ export async function serve(config: Config, options: ServeOptions): Promise<() =
 
   return async () => {
     for (const timer of timers) clearInterval(timer);
-    // Stop taking HomeKit requests first, then drain cameras and printers.
+    // Resume commands run in process groups of their own, which would outlive
+    // bamboozle: end them before anything that can fail. Stopped controls
+    // refuse presses, so nothing new starts in between.
+    await Promise.all(printers.map(({ resume }) => resume?.stop()));
+    // Stop taking HomeKit requests, then drain cameras and printers.
     await bridge.stop();
     await Promise.all(printers.map(({ camera }) => camera?.stop()));
     await Promise.all(printers.map(({ source }) => source.stop()));

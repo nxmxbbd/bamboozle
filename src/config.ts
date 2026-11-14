@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { dirname, isAbsolute, resolve } from 'node:path';
 import {
   COUNTDOWN_STYLES,
   PROGRESS_STYLES,
@@ -18,6 +18,8 @@ export interface PrinterConfig extends PrinterConnection {
   model?: string;
   /** Video source for the camera accessory (rtsp://, any ffmpeg URL, or lavfi:<graph>). */
   cameraSource?: string;
+  /** Command the Resume control runs: absolute executable, then fixed arguments (no shell). */
+  resumeCommand?: string[];
 }
 
 export interface CameraConfig {
@@ -108,6 +110,17 @@ function pickList<T extends string>(value: unknown, allowed: readonly T[], fallb
   return picked;
 }
 
+// Run without a shell, so no quoting or expansion to get wrong: the program
+// and each argument are given separately.
+function parseCommand(value: unknown, where: string): string[] {
+  if (!Array.isArray(value) || value.length === 0) throw new ConfigError(`${where} must be a list: the program's absolute path, then its arguments`);
+  for (const part of value) {
+    if (typeof part !== 'string' || part === '' || part.includes('\0')) throw new ConfigError(`${where} may contain only non-empty strings`);
+  }
+  if (!isAbsolute(value[0])) throw new ConfigError(`${where}[0] must be an absolute path (no PATH lookup, no shell)`);
+  return [...value] as string[];
+}
+
 function parsePrinter(item: unknown, index: number, baseDir: string): PrinterConfig {
   const where = `printers[${index}]`;
   if (!isRaw(item)) throw new ConfigError(`${where} must be an object`);
@@ -126,6 +139,7 @@ function parsePrinter(item: unknown, index: number, baseDir: string): PrinterCon
     if (typeof item['listenOnly'] !== 'boolean') throw new ConfigError(`${where}.listenOnly must be true or false`);
     printer.listenOnly = item['listenOnly'];
   }
+  if (item['resumeCommand'] !== undefined) printer.resumeCommand = parseCommand(item['resumeCommand'], `${where}.resumeCommand`);
   if (item['camera'] !== undefined) {
     if (!isRaw(item['camera'])) throw new ConfigError(`${where}.camera must be an object`);
     printer.cameraSource = parseCameraSource(item['camera']['source'], `${where}.camera.source`);
